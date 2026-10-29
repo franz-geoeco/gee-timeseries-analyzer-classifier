@@ -1,0 +1,30 @@
+[general]
+name=GEE Time Series Analyzer & Classifier
+qgisMinimumVersion=3.22
+description=Time series analysis and crop classification with Google Earth Engine in QGIS: Sentinel-1 (VV/VH, ascending + descending), Sentinel-2 and Landsat 8/9 time series for your own polygons -- drawn on the map, imported from a shapefile/layer, clicked on a field layer, or loaded from a GEE table asset -- computed in Google Earth Engine and charted inside QGIS -- plus supervised crop classification with models you can save and apply to other years.
+about=Ports two Google Earth Engine Code Editor apps (a time series analyzer and a field inspector) to a QGIS plugin. Draw any number of polygons on the QGIS canvas, import them from a shapefile / GeoPackage / any polygon layer, or click a field of a polygon layer (or of a GEE FeatureCollection asset downloaded as a crop-styled layer) to inspect it immediately. For a chosen year or date range the plugin extracts, in one server-side reduceRegions per product: Sentinel-1 GRD VV and VH backscatter (descending and ascending, border-noise masked), a Sentinel-2 SR optical index (SCL cloud mask) and a Landsat 8/9 C2 L2 optical index (QA_PIXEL cloud mask) -- NDVI, EVI, SAVI, NDWI or NDMI. Results are shown as combined (all polygons) and per-polygon matplotlib charts with a re-adjustable valid-pixel threshold, exportable as CSV and PNG. Monthly Sentinel-2 median composites (default May, July, September; true colour, false colour or NDVI) are added as map layers. Also registered as Processing algorithms. Requires the "Google Earth Engine" QGIS plugin (provides earthengine-api and the sign-in) and pandas + matplotlib (bundled with QGIS on Windows).
+version=1.10.0
+author=GEE Time Series Analyzer & Classifier
+
+changelog=1.10.0 Hover info buttons on every group and on the less obvious settings; HTML reports contain no local folder paths; GitHub README with screenshots; build script.
+    1.9.0 Renamed to GEE Time Series Analyzer & Classifier; the dock is organised in three sections (Time series, Classification, Export imagery) with a flatter, calmer look; new icon.
+    1.8.0 Field-level results (majority class, share, runner-up per polygon); class profiles (mean ± 1σ per class) in a tab and the report; training check (suspicious / likely mislabelled training polygons, exclude & retrain); spatial k-fold cross-validation; multi-year training by pooling samples of other models; Rotation tab (areas per year, transition matrices, flow diagram, change map, CSV); Processing algorithms: apply model (Earth Engine year / local stack), aggregate to fields, transition matrix.
+    1.7.0 Export of all Random Forest / CART trees (Earth Engine or offline) as an interactive HTML viewer: forest overview with variable usage, zoomable tree view with click-to-expand, depth control, variable highlight and class-coloured leaves.
+    1.6.0 HTML accuracy report (summary cards incl. CI / kappa scale / balanced accuracy / quantity & allocation disagreement, sortable per-class table with sample-size check, colour-coded confusion matrices, most frequent confusions, charts, settings). Classification plots scale with the number of classes.
+    1.5.0 Export tab: composites / time-series stacks with the full recipe (years, season, dekads to whole season, any reducers, gap filling, S2 indices/bands with Cloud Score+ or SCL mask and scene filter, S1), stack / per-period / per-variable files, Float32 or scaled Int16, WorldCover band, RGB quicklooks, live summary of periods and sizes, band metadata and JSON sidecars. The Classify tab shares the same recipe panel; offline classification reads scaled stacks.
+    1.4.0 Offline classification: download a feature stack (GeoTIFF with feature names, WorldCover band, recipe) or use any local raster stack; train, assess and classify locally with scikit-learn; models are interchangeable between Earth Engine and offline. Composite export as one multi-band stack.
+    1.3.0 Monthly composites: only the first layer is switched on; export of the composites as GeoTIFF (download or Drive) for a polygon layer / shapefile, a drawn rectangle or the map view. 0 line in the index charts.
+    1.2.0 Classify tab: supervised crop classification (Random Forest / GTB / CART) from Sentinel-2 + Sentinel-1 time-series composites. Training polygons and classification area from QGIS layers or GEE assets; selectable season, aggregation period, reducers, gap filling, indices / bands, cloud mask, WorldCover mask, sampling and train/test split. Accuracy (OA, kappa, confusion matrices, PA/UA/F1, importance), CSV export, direct GeoTIFF download (class codes, colour table) and Drive / asset export of the map. Models are saved as JSON and can be applied to other years.
+    1.1.0 Compare tab (many polygons on shared axes, mean +/- 1 sigma band, outlier ranking, click a line to highlight its polygon on the map and vice versa); clicked fields are kept and cached so only new polygons are queried; previous/next and map-selection switching of the charts
+    1.0.0 initial release
+
+tags=earth engine,gee,classification,random forest,crop mapping,sentinel-1,sentinel-2,landsat,ndvi,time series,sar,remote sensing,agriculture,fields,charts,processing
+
+category=Web
+icon=icons/gee_icon.svg
+experimental=True
+deprecated=False
+server=False
+plugin_dependencies=Google Earth Engine
+
+hasProcessingProvider=True

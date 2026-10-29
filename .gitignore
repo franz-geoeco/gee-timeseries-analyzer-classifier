@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# build output (attach the plugin ZIP to a GitHub release instead)
+dist/
+
+# QGIS / OS
+*.qgs~
+*.aux.xml
+.DS_Store
+Thumbs.db
