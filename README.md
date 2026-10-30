@@ -31,7 +31,13 @@ The plugin works with polygons you draw, import or click on the map. It charts S
 
 ## Features
 
-The dock has three sections. Every group and the less obvious settings have an **ⓘ** button that explains them when you hover over it.
+The dock has four sections. Every group and the less obvious settings have an **ⓘ** button that explains them when you hover over it.
+
+### Spectra
+- **Surface-reflectance spectra** of points and polygons, anywhere on Earth, for a chosen **date**. For each sensor, Sentinel-2 SR (10 m) and Landsat 8/9 C2 L2 (30 m), the image **closest in time** within a search window is used. With the cloud mask on, only an image that is clear at that spot counts. The date and day difference are shown per sample.
+- Add samples by clicking a point, drawing a polygon, or taking the selected features of a layer. Points give the pixel value; polygons give mean ± standard deviation.
+- Charts show all samples per sensor, or both sensors of one sample, with the visible, red-edge, NIR and SWIR regions marked.
+- *Show images on map* adds the true-colour scene of the closest day. The spectra can be exported as CSV.
 
 ### Time series
 - **Polygons** come from several sources: draw them on the map, import them from any layer or file (SHP, GPKG, GeoJSON, KML…), click fields of a layer (*Field Inspector*), or download a GEE table asset as a styled layer.
@@ -63,6 +69,7 @@ The dock has three sections. Every group and the less obvious settings have an *
   - **spatial k-fold cross-validation** (folds of spatial blocks)
 - **Class profiles** (mean ± 1σ per class over the season) and a **training check** that flags likely mislabelled training fields. Flagged fields can be excluded with one click before retraining.
 - **Models as JSON files**: apply a model to other years (its features are rebuilt and it is retrained from the stored samples), and pool the samples of several years for **multi-year training**.
+- **Performance settings**: choose the CPU cores for the offline engine (Random Forest training and prediction run in parallel) and the number of parallel Earth Engine requests for downloads and cross-validation.
 - **Field-level results**: majority class per field, its share of the field (a confidence measure) and the runner-up class.
 - **Reports**:
   - a self-contained **HTML accuracy report**
@@ -87,12 +94,14 @@ The following algorithms work in batch mode and in the Model Builder:
 
 | | |
 |---|---|
-| ![Time series analysis](docs/images/timeseries_analysis.png) | ![Classification setup](docs/images/classification_setup.png) |
-| *Time series: time window, products and cloud thresholds* | *Classification setup (offline engine with a local stack)* |
-| ![Class profiles](docs/images/class_profiles.png) | ![Training check](docs/images/training_check.png) |
-| *Class profiles of the training samples* | *Training check: likely mislabelled fields* |
-| ![Export imagery](docs/images/export_imagery.png) | ![Crop rotation](docs/images/crop_rotation.png) |
-| *Export imagery with the full composite settings* | *Crop rotation between two years* |
+| ![Spectra](docs/images/spectra.png) | ![Time series analysis](docs/images/timeseries_analysis.png) |
+| *Spectra: closest Sentinel-2 and Landsat image to a date* | *Time series: time window, products and cloud thresholds* |
+| ![Classification setup](docs/images/classification_setup.png) | ![Training check](docs/images/training_check.png) |
+| *Classification setup (offline engine with a local stack)* | *Training check: likely mislabelled fields* |
+| ![Class profiles](docs/images/class_profiles.png) | ![Crop rotation](docs/images/crop_rotation.png) |
+| *Class profiles of the training samples* | *Crop rotation between two years* |
+| ![Export imagery](docs/images/export_imagery.png) | |
+| *Export imagery with the full composite settings* | |
 
 <p align="center">
   <img src="docs/images/html_report.png" width="80%" alt="HTML accuracy report"><br>
@@ -130,6 +139,10 @@ Install the ZIP as above. Alternatively, copy `qgis_plugin/gee_timeseries_analyz
 ## Getting started
 
 Sign in once through the **Google Earth Engine** plugin. This plugin then uses that sign-in and Cloud project automatically; you can also enter a different project under *Time series → Polygons → Earth Engine*.
+
+**Spectra for a date**
+1. *Spectra*: set the target date and search window, then click *Click a point* or *Draw a polygon* and sample on the map.
+2. The spectra appear with the date of the closest clear image per sensor. Use *Show images on map* to view those scenes.
 
 **Time series of a few fields**
 1. *Time series → Polygons*: draw polygons, or *Open file…* to import a shapefile.

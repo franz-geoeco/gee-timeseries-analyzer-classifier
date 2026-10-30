@@ -613,16 +613,17 @@ def pool_samples(train_df, extra):
     return pd.concat([train_df, ex], ignore_index=True)
 
 
-def run_cv(own_df, bands, codes, cv, fit_predict, progress_cb=None, cancel_cb=None):
+def run_cv(own_df, bands, codes, cv, fit_predict, progress_cb=None, cancel_cb=None, workers=1):
     """Spatial k-fold cross-validation of the run's own samples (train + test)."""
     from . import analysis_tools as at
     return at.cross_validate(own_df, bands, codes, fit_predict, int(cv.get("k", 5)),
-                             float(cv.get("block_km", 5)), int(cv.get("seed", 42)), progress_cb, cancel_cb)
+                             float(cv.get("block_km", 5)), int(cv.get("seed", 42)), progress_cb, cancel_cb,
+                             workers)
 
 
 def run_training(year, features, classifier_cfg, classes, training, split, aoi,
                  mask_classes=None, sampling="mean", max_per_class=200, pixel_accuracy=True,
-                 extra_samples=None, cv=None, progress_cb=None, cancel_cb=None):
+                 extra_samples=None, cv=None, workers=4, progress_cb=None, cancel_cb=None):
     """Builds the feature stack, samples the training (and test) polygons,
     trains, evaluates and builds the classified map. Returns a result dict;
     result["model"] is what save_model writes."""
@@ -661,7 +662,7 @@ def run_training(year, features, classifier_cfg, classes, training, split, aoi,
         all_df = pd.concat([d for d in (own_df, test_df) if d is not None], ignore_index=True)
         cv_res = run_cv(all_df, bands, codes, cv,
                         lambda tr, te: predict(train(pool_samples(tr, extra_samples), bands, classifier_cfg),
-                                               te, bands), progress_cb, cancel_cb)
+                                               te, bands), progress_cb, cancel_cb, workers)
 
     mask = worldcover_mask(mask_classes) if mask_classes else None
     class_map = classify_map(stack, clf, region, mask)
@@ -889,12 +890,13 @@ def model_summary(model):
 # Direct download (GeoTIFF with class codes) -- the map layer in QGIS is only
 # an Earth Engine tile service and can't be saved as a raster.
 # ---------------------------------------------------------------------------
-def download_map(class_map, region, classes, path, scale=10, crs=None, progress_cb=None, cancel_cb=None):
+def download_map(class_map, region, classes, path, scale=10, crs=None, workers=4,
+                 progress_cb=None, cancel_cb=None):
     """Classified map -> local GeoTIFF: class codes, background 255 = NoData,
     colour table and class names (gee_client.download_image)."""
     palette = [(int(k["code"]), _hex_rgb(k["color"]), str(k["name"])) for k in classes]
     return c.download_image(class_map.unmask(NODATA, False).toByte().rename("class"), region, path,
-                            ["class"], "uint8", NODATA, scale, crs, palette=palette,
+                            ["class"], "uint8", NODATA, scale, crs, palette=palette, workers=workers,
                             progress_cb=progress_cb, cancel_cb=cancel_cb)
 
 
@@ -953,7 +955,7 @@ STACK_EXTENTS = {
 
 
 def download_feature_stack(year, features, path, aoi=None, training=None, classes=None, extent="aoi",
-                           scale=10, crs=None, progress_cb=None, cancel_cb=None):
+                           scale=10, crs=None, workers=4, progress_cb=None, cancel_cb=None):
     """Downloads the feature stack of `year` (bands = band_names(features),
     float32, NoData -9999) plus the ESA WorldCover classes as band
     'worldcover', tagged with year and feature recipe. extent 'aoi' clips to
@@ -975,7 +977,8 @@ def download_feature_stack(year, features, path, aoi=None, training=None, classe
     image = stack.unmask(STACK_NODATA, False).addBands(wc).toFloat()
     meta = {"GTA_KIND": "feature_stack", "GTA_YEAR": int(year), "GTA_RECIPE": json.dumps(features)}
     return c.download_image(image, region, path, bands + ["worldcover"], "float32", STACK_NODATA,
-                            scale, crs, metadata=meta, progress_cb=progress_cb, cancel_cb=cancel_cb)
+                            scale, crs, metadata=meta, workers=workers, progress_cb=progress_cb,
+                            cancel_cb=cancel_cb)
 
 
 # ---------------------------------------------------------------------------
@@ -1100,7 +1103,7 @@ def _sidecar(path, job, scale, crs):
 
 
 def download_export(region, years, features, folder, content="data", layout="stack", dtype="float32",
-                    prefix="s2", worldcover=False, clip=True, scale=10, crs=None,
+                    prefix="s2", worldcover=False, clip=True, scale=10, crs=None, workers=4,
                     progress_cb=None, cancel_cb=None):
     """Downloads every export job as a GeoTIFF (+ JSON sidecar with the
     recipe and band table) into `folder`; returns the paths."""
@@ -1115,7 +1118,7 @@ def download_export(region, years, features, folder, content="data", layout="sta
             if progress_cb is not None:
                 progress_cb(i * n + j, len(jobs) * n, f"{name} ({i + 1}/{len(jobs)}): {msg}")
         c.download_image(job["image"], region, path, job["bands"], job["dtype"], job["nodata"], scale, crs,
-                         metadata=job["metadata"], band_meta=job["band_meta"],
+                         metadata=job["metadata"], band_meta=job["band_meta"], workers=workers,
                          progress_cb=sub, cancel_cb=cancel_cb)
         _sidecar(path, job, scale, crs)
         paths.append(path)

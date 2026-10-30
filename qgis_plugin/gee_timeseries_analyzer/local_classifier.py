@@ -275,8 +275,10 @@ def split_polygons(features, classes, split):
 # ---------------------------------------------------------------------------
 # Classifier
 # ---------------------------------------------------------------------------
-def make_estimator(cfg, n_features):
-    """scikit-learn counterpart of classification.make_classifier."""
+def make_estimator(cfg, n_features, n_jobs=-1):
+    """scikit-learn counterpart of classification.make_classifier. n_jobs =
+    CPU cores for Random Forest training and prediction (-1 = all); boosting
+    and single trees run on one core."""
     require_sklearn()
     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
     from sklearn.tree import DecisionTreeClassifier
@@ -293,7 +295,7 @@ def make_estimator(cfg, n_features):
             max_features=min(vps, n_features) if vps else "sqrt",
             min_samples_leaf=int(cfg.get("min_leaf", 1)), max_leaf_nodes=max_nodes,
             bootstrap=True, max_samples=bag if bag < 1 else None, oob_score=True,
-            random_state=seed, n_jobs=-1)
+            random_state=seed, n_jobs=n_jobs)
     if kind == "gtb":
         return GradientBoostingClassifier(
             n_estimators=int(cfg.get("trees", 300)), learning_rate=float(cfg.get("shrinkage", 0.05)),
@@ -304,8 +306,8 @@ def make_estimator(cfg, n_features):
     raise ValueError(f"Unknown classifier {kind}")
 
 
-def train(df, bands, cfg):
-    est = make_estimator(cfg, len(bands))
+def train(df, bands, cfg, n_jobs=-1):
+    est = make_estimator(cfg, len(bands), n_jobs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")     # OOB warnings for tiny classes
         est.fit(df[bands].to_numpy(np.float32), df[k.CLASS_PROP].to_numpy(int))
@@ -415,7 +417,7 @@ def _stack_label(info):
 
 def run_local_training(train_stack, predict_stack_path, out_path, classifier_cfg, classes, training, split,
                        mask_classes=None, sampling="mean", max_per_class=200, pixel_accuracy=True,
-                       extra_samples=None, cv=None, progress_cb=None, cancel_cb=None):
+                       extra_samples=None, cv=None, n_jobs=-1, progress_cb=None, cancel_cb=None):
     """Offline counterpart of classification.run_training. training =
     {"type": "features", "features": [...]} (a QGIS layer)."""
     require_sklearn()
@@ -445,13 +447,14 @@ def run_local_training(train_stack, predict_stack_path, out_path, classifier_cfg
     train_df = k.pool_samples(train_df, extra_samples)
 
     k._step(progress_cb, cancel_cb, 2, n, "Training the classifier")
-    est, imp, oob = train(train_df, bands, classifier_cfg)
+    est, imp, oob = train(train_df, bands, classifier_cfg, n_jobs)
     cv_res = None
     if cv:
+        # folds one after another: each Random Forest already uses n_jobs cores
         all_df = pd.concat([d for d in (own_df, test_df) if d is not None], ignore_index=True)
         cv_res = k.run_cv(all_df, bands, codes, cv,
                           lambda tr, te: predict_samples(train(k.pool_samples(tr, extra_samples), bands,
-                                                               classifier_cfg)[0], te, bands),
+                                                               classifier_cfg, n_jobs)[0], te, bands),
                           progress_cb, cancel_cb)
 
     metrics = pixel_metrics = per_sample = None
@@ -490,7 +493,7 @@ def run_local_training(train_stack, predict_stack_path, out_path, classifier_cfg
             "train_counts": train_df[k.CLASS_PROP].value_counts().to_dict(), "model": model}
 
 
-def run_local_apply(model, stack_path, out_path, mask_classes=None, reference=None,
+def run_local_apply(model, stack_path, out_path, mask_classes=None, reference=None, n_jobs=-1,
                     progress_cb=None, cancel_cb=None):
     """Applies a saved model (online or offline) to a local stack: the
     classifier is retrained from the stored samples with scikit-learn.
@@ -501,7 +504,7 @@ def run_local_apply(model, stack_path, out_path, mask_classes=None, reference=No
     codes = [int(q["code"]) for q in classes]
     k._step(progress_cb, cancel_cb, 0, 3, "Retraining the stored model")
     train_df = k.model_samples(model)
-    est, imp, oob = train(train_df, bands, model["classifier"])
+    est, imp, oob = train(train_df, bands, model["classifier"], n_jobs)
 
     metrics = pixel_metrics = per_sample = None
     if reference is not None:

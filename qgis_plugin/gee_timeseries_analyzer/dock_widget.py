@@ -2,6 +2,7 @@
 three sections drives the real QGIS map canvas and hosts embedded
 matplotlib charts:
 
+  Spectra         -- spectra of points / polygons for a date (spectra_tab.py)
   Time series     -- Polygons, Analysis, Charts, Compare (below)
   Classification  -- classify_tab.py (+ the crop rotation, rotation_tab.py)
   Export imagery  -- composites / time-series stacks as GeoTIFF
@@ -51,13 +52,15 @@ from . import polygon_layer as pl
 from .tasks import ExtractTask, CallTask
 from .classify_tab import ClassificationTab
 from .rotation_tab import RotationTab
+from .spectra_tab import SpectraTab
 from .recipe_widget import FeatureRecipeWidget
 from . import style
 from . import help_texts as H
 from . import classification as k
 
 TITLE = "GEE Time Series Analyzer & Classifier"
-SECTIONS = ("Time series", "Classification", "Export imagery")
+SECTIONS = ("Spectra", "Time series", "Classification", "Export imagery")
+SEC_SPECTRA, SEC_TS, SEC_CLASS, SEC_EXPORT = range(4)
 CURRENT_YEAR = 2026
 MAX_POLYGONS = 300
 COMPOSITE_GROUP = "GEE Sentinel-2 composites"
@@ -181,6 +184,10 @@ class GEEDockWidget(QDockWidget):
 
         self.sections = QStackedWidget()
         root_layout.addWidget(self.sections, 1)
+
+        # Spectra: spectral sampling for a date (spectra_tab.py)
+        self.spectra_tab = SpectraTab(self)
+        self.sections.addWidget(self._scrolled(self.spectra_tab))
 
         # Time series: the four tabs of the original apps
         ts = QWidget()
@@ -594,6 +601,8 @@ class GEEDockWidget(QDockWidget):
         oform.addRow("CRS:", self.exp_crs)
         self.exp_prefix = QLineEdit("s2")
         oform.addRow("File name prefix:", self.exp_prefix)
+        self.exp_requests = style.requests_spin()
+        oform.addRow("Parallel requests:", style.with_info(self.exp_requests, H.REQUESTS))
         layout.addWidget(out)
 
         self.exp_summary = QLabel()
@@ -1223,7 +1232,7 @@ class GEEDockWidget(QDockWidget):
         self._refresh_charts()
         if self.tabs.currentIndex() not in (2, 3):
             self.tabs.setCurrentIndex(2)
-        self._show_section(0)
+        self._show_section(SEC_TS)
         if focus is not None:
             self._select_on_map([focus])
         n_img = 0 if self.raw_df is None or len(self.raw_df) == 0 else self.raw_df["date"].nunique()
@@ -1298,7 +1307,7 @@ class GEEDockWidget(QDockWidget):
         self._highlight_compare(pid, select_on_map=False)
         if switch_tab and idx >= 0 and self.tabs.currentIndex() not in (2, 3):
             self.tabs.setCurrentIndex(2)
-            self._show_section(0)
+            self._show_section(SEC_TS)
 
     def _poly_by_pid(self, pid):
         return next((q for q in self.analysis_polygons if q["pid"] == pid), None)
@@ -1678,6 +1687,7 @@ class GEEDockWidget(QDockWidget):
         if not folder:
             return
         kwargs["folder"] = folder
+        kwargs["workers"] = self.exp_requests.value()
         self._export_task = CallTask("Downloading composites", k.download_export, kwargs,
                                      self._on_export_done)
         self._export_task.progressText.connect(self.status_label.setText)
@@ -1833,6 +1843,7 @@ class GEEDockWidget(QDockWidget):
         if self._task is not None:
             self._task.cancel()
         self.classify_tab.cleanup()
+        self.spectra_tab.cleanup()
         self.rotation_tab.cleanup()
         if self._export_task is not None:
             self._export_task.cancel()

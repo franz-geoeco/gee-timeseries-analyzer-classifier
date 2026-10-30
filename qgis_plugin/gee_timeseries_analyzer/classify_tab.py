@@ -125,6 +125,13 @@ class ClassificationTab(QWidget):
         layout.addWidget(self._build_aoi_box())
         layout.addWidget(self._build_features_box())
         layout.addWidget(self._build_classifier_box())
+        perf = QGroupBox("Performance")
+        pform = QFormLayout(perf)
+        self.cores = style.cores_spin()
+        pform.addRow("CPU cores (offline):", style.with_info(self.cores, H.CORES))
+        self.requests = style.requests_spin()
+        pform.addRow("Parallel Earth Engine requests:", style.with_info(self.requests, H.REQUESTS))
+        layout.addWidget(perf)
 
         run_row = QHBoxLayout()
         self.btn_train = QPushButton("Train && classify")
@@ -944,7 +951,8 @@ class ClassificationTab(QWidget):
             return
         self._start(f"Downloading the {self.year.value()} feature stack", k.download_feature_stack,
                     {"year": self.year.value(), "features": f, "path": path, "aoi": aoi, "training": training,
-                     "classes": classes, "extent": extent, "scale": f["scale"]},
+                     "classes": classes, "extent": extent, "scale": f["scale"],
+                     "workers": self.requests.value()},
                     on_done=self._on_stack_done)
 
     def _on_stack_done(self, task, ok):
@@ -1004,7 +1012,8 @@ class ClassificationTab(QWidget):
                      "classifier_cfg": self._classifier(), "classes": [dict(q) for q in self.classes],
                      "training": training, "split": self._split(), "mask_classes": mask,
                      "sampling": self.sampling.currentData(), "max_per_class": self.max_px.value(),
-                     "pixel_accuracy": self.chk_pixel_acc.isChecked(), "extra_samples": extra, "cv": self._cv()})
+                     "pixel_accuracy": self.chk_pixel_acc.isChecked(), "extra_samples": extra, "cv": self._cv(),
+                     "n_jobs": self.cores.value()})
 
     def on_apply_local(self):
         try:
@@ -1036,7 +1045,7 @@ class ClassificationTab(QWidget):
             return
         self._start("Applying the model to the local stack", lc.run_local_apply,
                     {"model": self.model, "stack_path": stack, "out_path": out, "mask_classes": mask,
-                     "reference": reference})
+                     "reference": reference, "n_jobs": self.cores.value()})
 
     def on_train(self):
         if self._task is not None:
@@ -1064,6 +1073,7 @@ class ClassificationTab(QWidget):
         except ValueError as e:
             self.dock._warn(str(e))
             return
+        kwargs["workers"] = self.requests.value()
         self._start(f"Training the {self.year.value()} classification", k.run_training, kwargs)
 
     def on_apply(self):
@@ -1310,7 +1320,7 @@ class ClassificationTab(QWidget):
         self._start(f"Downloading {os.path.basename(path)}", k.download_map,
                     {"class_map": self.result["map"], "region": self.result["region"],
                      "classes": self.result["classes"], "path": path,
-                     "scale": self.exp_scale.value(), "crs": crs},
+                     "scale": self.exp_scale.value(), "crs": crs, "workers": self.requests.value()},
                     on_done=self._on_download_done)
 
     def _on_download_done(self, task, ok):
@@ -1350,7 +1360,8 @@ class ClassificationTab(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Save tree viewer", default, "HTML (*.html)")
         if path:
             self._start("Exporting the trees", tree_export.save_trees_html,
-                        {"result": self.result, "path": path}, on_done=self._on_trees_done)
+                        {"result": self.result, "path": path, "n_jobs": self.cores.value()},
+                        on_done=self._on_trees_done)
 
     def _on_trees_done(self, task, ok):
         if not self._finish(task, ok, "Tree export"):

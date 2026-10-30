@@ -103,7 +103,7 @@ def _tree_stats(tree):
 # ---------------------------------------------------------------------------
 # Building the forest of a result
 # ---------------------------------------------------------------------------
-def forest_for_result(result, progress_cb=None, cancel_cb=None):
+def forest_for_result(result, n_jobs=-1, progress_cb=None, cancel_cb=None):
     """-> forest dict (features, classes, trees). Retrains from the model's
     samples: Earth Engine for online models, scikit-learn offline."""
     model = result["model"]
@@ -118,7 +118,7 @@ def forest_for_result(result, progress_cb=None, cancel_cb=None):
     k._step(progress_cb, cancel_cb, 0, 3, "Rebuilding the classifier")
     if result.get("local"):
         from . import local_classifier as lc
-        est, _, _ = lc.train(df, bands, cfg)
+        est, _, _ = lc.train(df, bands, cfg, n_jobs)
         code_order = [int(x) for x in est.classes_]
         ests = est.estimators_ if kind == "rf" else [est]
         k._step(progress_cb, cancel_cb, 1, 3, "Reading the trees")
@@ -159,8 +159,8 @@ def forest_for_result(result, progress_cb=None, cancel_cb=None):
             "samples": len(df), "created": dt.datetime.now().strftime("%Y-%m-%d %H:%M")}
 
 
-def save_trees_html(result, path, progress_cb=None, cancel_cb=None):
-    forest = forest_for_result(result, progress_cb, cancel_cb)
+def save_trees_html(result, path, n_jobs=-1, progress_cb=None, cancel_cb=None):
+    forest = forest_for_result(result, n_jobs, progress_cb, cancel_cb)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(build_html(forest))
     return path, len(forest["trees"])

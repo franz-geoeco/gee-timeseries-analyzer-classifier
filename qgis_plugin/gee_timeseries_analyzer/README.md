@@ -6,8 +6,9 @@ A QGIS port of two Google Earth Engine Code Editor apps, a **time series analyze
 
 ## What it does
 
-The dock has three sections, switched in its header:
+The dock has four sections, switched in its header:
 
+-   **Spectra**: surface-reflectance spectra of points and polygons from the Sentinel-2 and Landsat 8/9 image closest to a chosen date, anywhere on Earth. Images within a search window (± days) are searched per sensor. With the cloud mask, only images clear at the sample count (for polygons: a minimum clear share). Points give the pixel value; polygons give mean ± σ. Charts show all samples per sensor or both sensors of one sample. *Show images on map* adds the closest true-colour scenes (map view), and the spectra can be exported as CSV with band, wavelength, image ID and date difference.
 -   **Time series**: the *Polygons*, *Analysis*, *Charts* and *Compare* tabs.
 -   **Classification**: the *Setup*, *Results*, *Class profiles*, *Training check* and *Crop rotation* tabs.
 -   **Export imagery**: composites and time-series stacks as GeoTIFF.
@@ -94,6 +95,7 @@ The dock has three sections, switched in its header:
         -   The map is written block by block to a paletted GeoTIFF (255 = NoData) and added to the project.
         -   Models have the same file format in both modes. An online model can classify a local stack with the same band names, and an offline model trained on a downloaded feature stack can be applied online to other years. Because both modes retrain from the stored samples, the results differ slightly: GEE's smile RF and scikit-learn's RF are different implementations.
         -   scikit-learn is required for the offline mode. If it is missing, run `python -m pip install scikit-learn` in the OSGeo4W Shell.
+    -   **Performance** (Setup): *CPU cores (offline)* sets how many cores Random Forest training and prediction use. The default is all but one, so QGIS stays responsive; on 24 cores training is about 12× and prediction about 6× faster than on one. Gradient boosting and single trees use one core. *Parallel Earth Engine requests* (default 4) sets how many tile downloads and online cross-validation folds run at once. Both values are remembered.
     -   **Spatial k-fold cross-validation** (option under *Classifier*): the train + test samples are grouped into square blocks (e.g. 5 km) by their polygon centroid, and the blocks are split into k folds. Neighbouring fields and the pixels of one field never end up in training and test at once. The result is OA and kappa as mean ± sd over the folds, per-class F1 mean ± sd and a per-fold table, shown in Results and in the HTML report. Works online and offline.
     -   **Multi-year training** (*Model → Pool samples from models…*): the samples stored in other model files (e.g. a 2025 model) are added to the next training run. They need the same feature bands; classes are matched by value or name. The pooled sources are recorded in the model.
     -   **Field-level results** (*Results*): aggregates the map, from Earth Engine or a local GeoTIFF, to any polygon layer. Each field gets the majority class (`cls_code`, `cls_name`), its share of the field's pixels as a confidence (`cls_share`), the runner-up class (`cls2_*`) and `n_pixels`. The output is a class-styled layer; filter on `cls_share` to find mixed or uncertain fields.

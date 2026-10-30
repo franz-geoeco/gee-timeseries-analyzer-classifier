@@ -4,7 +4,9 @@ marks the section switch, the active tab and the main action buttons
 (objectName "primary"); InfoButton = the hover help."""
 from qgis.PyQt.QtCore import Qt, QObject, QEvent
 from qgis.PyQt.QtGui import QCursor
-from qgis.PyQt.QtWidgets import QToolButton, QToolTip, QWidget, QHBoxLayout
+import os
+
+from qgis.PyQt.QtWidgets import QToolButton, QToolTip, QWidget, QHBoxLayout, QSpinBox
 
 ACCENT = "#1f6f8b"
 ACCENT_DARK = "#185a71"
@@ -50,6 +52,40 @@ QPushButton#primary:disabled {{ background: palette(mid); color: palette(light);
 QProgressBar {{ border: none; background: palette(midlight); border-radius: 3px; max-height: 6px; }}
 QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
 """
+
+
+CORES_KEY = "gee_timeseries_analyzer/cpu_cores"
+REQUESTS_KEY = "gee_timeseries_analyzer/ee_requests"
+
+
+def cpu_count():
+    return max(1, os.cpu_count() or 1)
+
+
+def cores_spin():
+    """CPU cores for the offline engine; default all but one (QGIS stays responsive)."""
+    from qgis.core import QgsSettings
+    spin = QSpinBox()
+    spin.setRange(1, cpu_count())
+    spin.setSuffix(f" of {cpu_count()}")
+    spin.setValue(min(cpu_count(), int(QgsSettings().value(CORES_KEY, max(1, cpu_count() - 1)))))
+    spin.valueChanged.connect(lambda v: QgsSettings().setValue(CORES_KEY, int(v)))
+    return spin
+
+
+def requests_spin():
+    """Parallel Earth Engine requests (tile downloads, cross-validation folds)."""
+    from qgis.core import QgsSettings
+    spin = QSpinBox()
+    spin.setRange(1, 16)
+    spin.setValue(int(QgsSettings().value(REQUESTS_KEY, 4)))
+    spin.valueChanged.connect(lambda v: QgsSettings().setValue(REQUESTS_KEY, int(v)))
+    return spin
+
+
+def requests_value():
+    from qgis.core import QgsSettings
+    return max(1, min(16, int(QgsSettings().value(REQUESTS_KEY, 4))))
 
 
 def primary(button):

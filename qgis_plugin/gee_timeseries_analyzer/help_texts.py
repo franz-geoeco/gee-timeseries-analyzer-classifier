@@ -2,6 +2,17 @@
 the group box title; the other constants belong to single settings."""
 
 GROUPS = {
+    # -- Spectra -------------------------------------------------------------
+    "Date and sensors":
+        "For every sample and sensor the image <b>closest to the target date</b> within the search window is "
+        "used — anywhere on Earth. Sentinel-2 SR (10 m, from 2017) and Landsat 8/9 C2 L2 (30 m, from 2013) "
+        "are searched separately, so their dates can differ; the table shows each date and the difference in "
+        "days.",
+    "Samples":
+        "A <b>point</b> gives the reflectance of the pixel under it; a <b>polygon</b> the mean ± standard "
+        "deviation of all its pixels. Add samples by clicking, drawing or from the selected features of a "
+        "point or polygon layer (up to 10). Samples are processed one after another in the background; "
+        "after changing date or settings press <b>Re-sample all</b>.",
     # -- Time series ---------------------------------------------------------
     "Earth Engine":
         "Connection to Google Earth Engine. The plugin uses the sign-in and Cloud project of the official "
@@ -55,6 +66,8 @@ GROUPS = {
     "Classifier":
         "Random Forest is the robust default. <b>Variables per split</b> = auto uses √(number of features). "
         "<b>Seed</b> makes runs reproducible — a saved model retrains to the identical classifier.",
+    "Performance":
+        "How much of your computer and of Earth Engine a run may use at once. Both values are remembered.",
     "Model":
         "A model file (JSON) stores the feature recipe, classifier settings, classes and colours and the "
         "training samples. <b>Apply model</b> rebuilds the same features for another year (or uses a local "
@@ -87,6 +100,18 @@ GROUPS = {
         "sidecar with the full recipe — and works as a stack for the offline classification.",
 }
 
+CORES = ("CPU cores for the <b>offline</b> engine: Random Forest training and prediction run in parallel "
+         "(on 24 cores about 12× faster training and 6× faster prediction than on one). Default: all but one, "
+         "so QGIS stays responsive. Gradient boosting and single trees use one core. Earth Engine runs on "
+         "Google's servers — your cores don't matter there.")
+REQUESTS = ("How many Earth Engine requests run at the same time: tile downloads (classified map, feature "
+            "stacks, Export imagery) and the folds of an online cross-validation. 4–8 is usually fastest; "
+            "Earth Engine limits concurrent requests per user, more can lead to retries or 'too many "
+            "requests' errors.")
+SPECTRA_CLOUD = ("<b>Cloud mask</b>: Sentinel-2 SCL (cloud, shadow, cirrus, saturated) / Landsat QA_PIXEL "
+                 "(cloud, dilated cloud, shadow, cirrus). With the mask, a date only counts if the point is "
+                 "clear — or, for polygons, at least the given share of the polygon. <b>Scenes ≤ x % cloud</b> "
+                 "skips whole scenes beforehand. Without the mask the closest scene is used as it is.")
 PERIOD = ("Length of the composites. Dekads = 1st–10th, 11th–20th, 21st–end of month. With "
           "<i>whole season</i> each variable gets one value per year.")
 REDUCERS = ("How the clear observations of a period are combined. Median is robust to remaining clouds; "

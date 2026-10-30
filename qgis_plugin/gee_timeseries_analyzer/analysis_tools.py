@@ -139,8 +139,9 @@ def spatial_folds(df, k_folds=5, block_km=5.0, seed=42):
 
 
 def cross_validate(df, bands, codes, fit_predict, k_folds=5, block_km=5.0, seed=42,
-                   progress_cb=None, cancel_cb=None):
-    """fit_predict(train_df, test_df) -> predicted codes. Returns {folds:
+                   progress_cb=None, cancel_cb=None, workers=1):
+    """fit_predict(train_df, test_df) -> predicted codes; with workers > 1
+    the folds run in parallel threads (Earth Engine requests). Returns {folds:
     [metrics...], pooled: metrics, oa_mean, oa_sd, kappa_mean, kappa_sd,
     f1_mean [per class], f1_sd, k, block_km, n_blocks}."""
     if X_PROP not in df.columns or df[X_PROP].isna().all():
@@ -148,15 +149,31 @@ def cross_validate(df, bands, codes, fit_predict, k_folds=5, block_km=5.0, seed=
     df = df.dropna(subset=[X_PROP, Y_PROP]).reset_index(drop=True)
     fold, n_blocks = spatial_folds(df, k_folds, block_km, seed)
     folds, ref_all, pred_all = [], [], []
-    for f in range(k_folds):
+    jobs = [f for f in range(k_folds)
+            if (fold == f).any() and df[fold != f][k.CLASS_PROP].nunique() >= 2]
+
+    def run(f):
         if cancel_cb is not None and cancel_cb():
             raise InterruptedError("Cancelled")
-        if progress_cb is not None:
-            progress_cb(f, k_folds, f"Cross-validation fold {f + 1}/{k_folds}")
-        test, train = df[fold == f], df[fold != f]
-        if len(test) == 0 or train[k.CLASS_PROP].nunique() < 2:
-            continue
-        pred = np.asarray(fit_predict(train, test))
+        return f, np.asarray(fit_predict(df[fold != f], df[fold == f]))
+
+    if workers > 1 and len(jobs) > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        results = {}
+        with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+            for i, fut in enumerate(as_completed([pool.submit(run, f) for f in jobs])):
+                f, pred = fut.result()
+                results[f] = pred
+                if progress_cb is not None:
+                    progress_cb(i + 1, len(jobs), f"Cross-validation: {i + 1}/{len(jobs)} folds done")
+    else:
+        results = {}
+        for i, f in enumerate(jobs):
+            if progress_cb is not None:
+                progress_cb(i, len(jobs), f"Cross-validation fold {f + 1}/{k_folds}")
+            results[f] = run(f)[1]
+    for f in sorted(results):
+        test, pred = df[fold == f], results[f]
         m = k.accuracy_metrics(test[k.CLASS_PROP], pred, codes)
         m["fold"] = f + 1
         folds.append(m)

@@ -442,3 +442,82 @@ def plot_alluvial(fig, rot, min_share=0.002, title="Crop rotation"):
     ax.set_title(f"{title} — areas in ha; bands = transitions (pale = unchanged)", loc="left", fontsize=9,
                  fontweight="bold")
     fig.tight_layout()
+
+
+# ---------------------------------------------------------------------------
+# Spectra (Spectra section)
+# ---------------------------------------------------------------------------
+_REGIONS = [(400, 700, "VIS", "#f3f6fb"), (700, 750, "red edge", "#fbf3f3"), (750, 1000, "NIR", "#f4faf3"),
+            (1000, 2300, "SWIR", "#faf7f0")]
+SENSOR_STYLE = {"s2": {"ls": "-", "marker": "o", "label": "Sentinel-2"},
+                "landsat": {"ls": "--", "marker": "s", "label": "Landsat 8/9"}}
+
+
+def _spectrum_axis(ax, title):
+    for lo, hi, name, col in _REGIONS:
+        ax.axvspan(lo, hi, color=col, zorder=0, lw=0)
+        ax.text((lo + hi) / 2, 1.0, name, transform=ax.get_xaxis_transform(), ha="center", va="bottom",
+                fontsize=6.5, color="#888888")
+    ax.set_xlim(400, 2300)
+    ax.set_xlabel("Wavelength (nm)", fontsize=8)
+    ax.set_ylabel("Surface reflectance", fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.grid(color="#e6e6e6", lw=0.6)
+    ax.set_title(title, loc="left", fontsize=9, fontweight="bold", pad=12)
+
+
+def _draw_spectrum(ax, res, colour, style, label):
+    wl, val, sd = res["wavelengths"], res["values"], res["sd"]
+    pts = [(w, v, s) for w, v, s in zip(wl, val, sd) if v is not None]
+    if not pts:
+        return
+    xs, ys, ss = zip(*pts)
+    ax.plot(xs, ys, color=colour, ls=style["ls"], marker=style["marker"], ms=3.5, lw=1.6, label=label)
+    if any(s is not None for s in ss):
+        lo = [y - (s or 0) for y, s in zip(ys, ss)]
+        hi = [y + (s or 0) for y, s in zip(ys, ss)]
+        ax.fill_between(xs, lo, hi, color=colour, alpha=0.12, lw=0)
+
+
+def plot_spectra(fig, samples, sensors, single=None):
+    """samples: [{id, name, color, results: {sensor: closest_spectrum dict
+    or None}}]. single=None -> one panel per sensor with all samples;
+    single=<sample> -> both sensors of one sample in one panel."""
+    fig.clear()
+    if not samples:
+        plot_placeholder(fig, "Click a point or draw a polygon on the map to sample a spectrum.")
+        return
+    if single is not None:
+        ax = fig.add_subplot(111)
+        _spectrum_axis(ax, f"{single['name']} — both sensors")
+        drawn = 0
+        for s in sensors:
+            res = (single.get("results") or {}).get(s)
+            if res:
+                st = SENSOR_STYLE[s]
+                _draw_spectrum(ax, res, single["color"] if s == "s2" else "#555555", st,
+                               f"{res['spacecraft'] or st['label']} · {res['date']} ({res['days']:+d} d)")
+                drawn += 1
+        if drawn:
+            ax.legend(fontsize=7, loc="upper left", frameon=False)
+        else:
+            _empty(ax, "No clear image within the search window.")
+    else:
+        axes = fig.subplots(len(sensors), 1, squeeze=False)[:, 0]
+        for ax, s in zip(axes, sensors):
+            st = SENSOR_STYLE[s]
+            _spectrum_axis(ax, st["label"])
+            drawn = 0
+            for q in samples:
+                res = (q.get("results") or {}).get(s)
+                if res:
+                    _draw_spectrum(ax, res, q["color"], {"ls": "-", "marker": st["marker"]},
+                                   f"{q['name']} · {res['date']} ({res['days']:+d} d)")
+                    drawn += 1
+            if drawn:
+                ax.legend(fontsize=7, loc="upper left", frameon=False, ncol=1 if drawn <= 5 else 2)
+            else:
+                _empty(ax, "No clear image within the search window.")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        fig.tight_layout()

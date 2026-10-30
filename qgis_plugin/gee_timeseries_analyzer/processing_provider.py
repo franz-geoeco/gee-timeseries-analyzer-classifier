@@ -255,8 +255,8 @@ def _polygons(source, context):
 
 
 class ApplyModelAlgorithm(_Base):
-    MODEL, ENGINE, YEAR, AREA, STACK, MASK, SCALE, OUTPUT = (
-        "MODEL", "ENGINE", "YEAR", "AREA", "STACK", "MASK", "SCALE", "OUTPUT")
+    MODEL, ENGINE, YEAR, AREA, STACK, MASK, SCALE, CORES, OUTPUT = (
+        "MODEL", "ENGINE", "YEAR", "AREA", "STACK", "MASK", "SCALE", "CORES", "OUTPUT")
     ENGINES = ["Earth Engine (rebuild the features for YEAR over AREA)", "Local raster stack (offline)"]
 
     def name(self):
@@ -285,6 +285,9 @@ class ApplyModelAlgorithm(_Base):
         self.addParameter(QgsProcessingParameterNumber(
             self.SCALE, "Resolution (m, Earth Engine)", QgsProcessingParameterNumber.Integer,
             defaultValue=10, minValue=10, maxValue=1000))
+        self.addParameter(QgsProcessingParameterNumber(
+            self.CORES, "CPU cores (offline; 0 = all)", QgsProcessingParameterNumber.Integer,
+            defaultValue=0, minValue=0, maxValue=1024))
         self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, "Classified map"))
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -306,7 +309,8 @@ class ApplyModelAlgorithm(_Base):
             if stack is None:
                 raise QgsProcessingException("Choose the raster stack.")
             try:
-                lc.run_local_apply(model, stack.source(), out, mask, None, progress, cancel)
+                cores = self.parameterAsInt(parameters, self.CORES, context) or -1
+                lc.run_local_apply(model, stack.source(), out, mask, None, cores, progress, cancel)
             except Exception as e:
                 raise QgsProcessingException(str(e))
             return {self.OUTPUT: out}
@@ -322,8 +326,10 @@ class ApplyModelAlgorithm(_Base):
         try:
             res = k.run_apply(model, year, aoi, mask, None, progress, cancel)
             feedback.pushInfo(f"Downloading the {year} map …")
+            from .style import requests_value
             k.download_map(res["map"], res["region"], res["classes"], out,
-                           self.parameterAsInt(parameters, self.SCALE, context), None, progress, cancel)
+                           scale=self.parameterAsInt(parameters, self.SCALE, context), crs=None,
+                           workers=requests_value(), progress_cb=progress, cancel_cb=cancel)
         except InterruptedError:
             raise QgsProcessingException("Cancelled.")
         except Exception as e:
