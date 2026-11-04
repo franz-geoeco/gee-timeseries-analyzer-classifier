@@ -113,6 +113,7 @@ class PlotPanel(QWidget):
         self.figure = Figure(figsize=(6, 8), dpi=100)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.hover = p.HoverTip(self.canvas)        # snap-to-point info on lines with set_hover()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.canvas)
@@ -150,7 +151,6 @@ class GEEDockWidget(QDockWidget):
         self._hooked_layer_id = None    # analysis layer whose selectionChanged we listen to
         self._cmp_artists = {}          # plotting.plot_compare bookkeeping
         self._cmp_highlight = None      # highlighted pid on the Compare tab
-        self._cmp_hover = None
         self._cmp_unchecked = set()     # pids unticked on the Compare tab
 
         self.draw_tool = pl.PolygonDrawTool(self.canvas)
@@ -808,7 +808,6 @@ class GEEDockWidget(QDockWidget):
         self.cmp_plot = PlotPanel()
         p.plot_placeholder(self.cmp_plot.figure, "No analysis yet.")
         self.cmp_plot.canvas.mpl_connect("button_press_event", self._on_cmp_press)
-        self.cmp_plot.canvas.mpl_connect("motion_notify_event", self._on_cmp_motion)
         splitter.addWidget(self.cmp_plot)
         splitter.setSizes([170, 520])
         layout.addWidget(splitter, 1)
@@ -1513,14 +1512,6 @@ class GEEDockWidget(QDockWidget):
         if event.button != 1 or event.inaxes is None or self.cmp_plot.toolbar.mode:
             return
         self._highlight_compare(self._cmp_line_at(event))
-
-    def _on_cmp_motion(self, event):
-        pid = self._cmp_line_at(event)
-        if pid == self._cmp_hover:
-            return
-        self._cmp_hover = pid
-        poly = self._poly_by_pid(pid) if pid is not None else None
-        self.cmp_plot.canvas.setToolTip(poly["name"] if poly else "")
 
     # ------------------------------------------------------------------
     # Sentinel-2 composites

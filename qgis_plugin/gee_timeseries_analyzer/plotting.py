@@ -13,11 +13,117 @@ Landsat 8/9 index.
 import warnings
 
 import matplotlib.dates as mdates
+import numpy as np
+from matplotlib.lines import Line2D
 
 from .gee_client import SERIES, INDEX_RANGE
 
 SOURCE_TXT = "Data: Copernicus Sentinel-1/-2, USGS Landsat 8/9 via Google Earth Engine"
 EMPTY_COL = "#888888"
+
+
+# ---------------------------------------------------------------------------
+# Hover: per-point information that snaps to the data
+# ---------------------------------------------------------------------------
+def set_hover(line, labels):
+    """Attaches one hover text per data point (same order as the line's
+    data) to a Line2D; HoverTip shows it when the cursor is near the point."""
+    line.gee_hover = list(labels)
+    return line
+
+
+class HoverTip:
+    """Snap-to-point tooltip for a FigureCanvas: the data point nearest to
+    the cursor (within `radius` px) on any line carrying set_hover() labels
+    is ringed in the line's colour and its text shown beside it. Pure
+    matplotlib; survives fig.clear() (re-created on the next hover)."""
+
+    def __init__(self, canvas, radius=12):
+        self.canvas, self.radius = canvas, radius
+        self._ann = self._ring = None
+        self._key = None
+        canvas.mpl_connect("motion_notify_event", self._on_move)
+        canvas.mpl_connect("figure_leave_event", lambda _e: self.hide())
+
+    def _nearest(self, event):
+        ax, best = event.inaxes, None
+        for ln in ax.get_lines():
+            labels = getattr(ln, "gee_hover", None)
+            if not labels or not ln.get_visible():
+                continue
+            xy = np.asarray(ln.get_xydata(), dtype=float)
+            if len(xy) != len(labels) or not len(xy):
+                continue
+            px = ax.transData.transform(xy)
+            d = np.hypot(px[:, 0] - event.x, px[:, 1] - event.y)
+            if np.isnan(d).all():
+                continue
+            i = int(np.nanargmin(d))
+            if d[i] <= self.radius and (best is None or d[i] < best[0] - 0.5
+                                        or (abs(d[i] - best[0]) <= 0.5 and ln.get_zorder() > best[3].get_zorder())):
+                best = (d[i], i, xy[i], ln)
+        return best
+
+    def _artists(self, ax):
+        if self._ann is not None and self._ann.axes is ax and self._ann.figure is not None:
+            return
+        self._ann = ax.annotate("", (0, 0), xytext=(12, 12), textcoords="offset points", fontsize=8,
+                                zorder=100, annotation_clip=False,
+                                bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="#999999", alpha=0.96))
+        self._ring = Line2D([], [], marker="o", ms=10, mfc="none", mew=2, ls="none", zorder=99)
+        ax.add_artist(self._ring)
+
+    def _on_move(self, event):
+        if event.inaxes is None or event.button is not None:
+            return self.hide()
+        hit = self._nearest(event)
+        if hit is None:
+            return self.hide()
+        _, i, (x, y), ln = hit
+        if self._key == (id(ln), i) and self._ann is not None and self._ann.get_visible():
+            return
+        self._key = (id(ln), i)
+        ax = event.inaxes
+        self._artists(ax)
+        bb = ax.bbox                                  # flip the box away from the nearer edge
+        right = event.x > bb.x0 + 0.6 * bb.width
+        top = event.y > bb.y0 + 0.6 * bb.height
+        self._ann.xy = (x, y)
+        self._ann.set_text(ln.gee_hover[i])
+        self._ann.set_position((-12 if right else 12, -12 if top else 12))
+        self._ann.set_ha("right" if right else "left")
+        self._ann.set_va("top" if top else "bottom")
+        self._ann.set_visible(True)
+        self._ring.set_data([x], [y])
+        self._ring.set_markeredgecolor(ln.get_color())
+        self._ring.set_visible(True)
+        self.canvas.draw_idle()
+
+    def hide(self):
+        self._key = None
+        if self._ann is not None and self._ann.get_visible():
+            self._ann.set_visible(False)
+            self._ring.set_visible(False)
+            self.canvas.draw_idle()
+
+
+def _fmt_date(d):
+    return d.strftime("%d %b %Y") if hasattr(d, "strftime") else str(d)[:10]
+
+
+def _ts_labels(part, key, index, name):
+    """Hover texts of a time-series line: polygon, series, date, value and
+    the share of valid pixels of that acquisition."""
+    title, unit = _series_title(key, index), _series_unit(key, index)
+    fmt = "{:.2f}" if SERIES[key]["unit"] else "{:.3f}"
+    valid = part["valid"] if "valid" in part.columns else [None] * len(part)
+    out = []
+    for d, v, c in zip(part["date"], part["value"], valid):
+        txt = f"{name}\n{title}\n{_fmt_date(d)}\n{unit}: {fmt.format(v)}"
+        if c is not None and c == c:
+            txt += f"\nvalid pixels: {c:.0%}"
+        out.append(txt)
+    return out
 
 
 def _series_title(key, index):
@@ -78,8 +184,9 @@ def plot_single_polygon(fig, df, series_keys, pid, name, index, date_range):
         if part is None or len(part) == 0:
             _empty(ax)
             continue
-        ax.plot(part["date"], part["value"], color=SERIES[key]["color"],
-                lw=1.6, marker="o", ms=3)
+        line, = ax.plot(part["date"], part["value"], color=SERIES[key]["color"],
+                        lw=1.6, marker="o", ms=3)
+        set_hover(line, _ts_labels(part, key, index, name))
 
     axes[0].set_xlim(*date_range)
     _attribute(fig)
@@ -111,9 +218,10 @@ def plot_combined(fig, df, series_keys, polygons, index, date_range, max_legend=
             pp = part[part["pid"] == poly["pid"]]
             if len(pp) == 0:
                 continue
-            ax.plot(pp["date"], pp["value"], color=poly["color"], lw=1.4, marker="o", ms=2.5,
-                    ls="--" if dashed else "-",
-                    label=poly["name"] if drawn < max_legend else None)
+            line, = ax.plot(pp["date"], pp["value"], color=poly["color"], lw=1.4, marker="o", ms=2.5,
+                            ls="--" if dashed else "-",
+                            label=poly["name"] if drawn < max_legend else None)
+            set_hover(line, _ts_labels(pp, key, index, poly["name"]))
             drawn += 1
         if drawn == 0:
             _empty(ax)
@@ -158,7 +266,11 @@ def plot_compare(fig, df, series_keys, polygons, index, date_range, uniform=Fals
             if len(st):
                 ax.fill_between(st.index, st["mean"] - st["std"], st["mean"] + st["std"],
                                 color="#95a5a6", alpha=0.22, lw=0, zorder=1)
-                ax.plot(st.index, st["mean"], color="#2c3e50", lw=1.3, ls=":", zorder=2)
+                mean, = ax.plot(st.index, st["mean"], color="#2c3e50", lw=1.3, ls=":", zorder=2)
+                fmt = "{:.2f}" if SERIES[key]["unit"] else "{:.3f}"
+                set_hover(mean, [f"Mean of {int(n)} polygons\n{_series_title(key, index)}\n{_fmt_date(d)}\n"
+                                 f"{_series_unit(key, index)}: {fmt.format(m)} ± {fmt.format(s)}"
+                                 for d, m, s, n in zip(st.index, st["mean"], st["std"], st["count"])])
         for q in polygons:
             pp = part[part["pid"] == q["pid"]]
             if len(pp) == 0:
@@ -167,6 +279,7 @@ def plot_compare(fig, df, series_keys, polygons, index, date_range, uniform=Fals
             line, = ax.plot(pp["date"], pp["value"], color=colour, lw=1.1, marker="o", ms=2,
                             alpha=0.85, zorder=3, picker=True, pickradius=5)
             line.set_gid(str(q["pid"]))
+            set_hover(line, _ts_labels(pp, key, index, q["name"]))
             out["lines"].setdefault(q["pid"], []).append(line)
             out["base"][line] = colour
 
@@ -466,13 +579,17 @@ def _spectrum_axis(ax, title):
     ax.set_title(title, loc="left", fontsize=9, fontweight="bold", pad=12)
 
 
-def _draw_spectrum(ax, res, colour, style, label):
+def _draw_spectrum(ax, res, colour, style, label, sample="", source=""):
     wl, val, sd = res["wavelengths"], res["values"], res["sd"]
-    pts = [(w, v, s) for w, v, s in zip(wl, val, sd) if v is not None]
+    names = res.get("names") or res.get("bands") or [""] * len(wl)
+    pts = [(w, v, s, n) for w, v, s, n in zip(wl, val, sd, names) if v is not None]
     if not pts:
         return
-    xs, ys, ss = zip(*pts)
-    ax.plot(xs, ys, color=colour, ls=style["ls"], marker=style["marker"], ms=3.5, lw=1.6, label=label)
+    xs, ys, ss, ns = zip(*pts)
+    line, = ax.plot(xs, ys, color=colour, ls=style["ls"], marker=style["marker"], ms=3.5, lw=1.6, label=label)
+    when = f"{res['date']} ({res['days']:+d} d)" if res.get("date") else ""
+    set_hover(line, [f"{sample}\n{n} · {w:g} nm\nreflectance: {v:.4f}" + (f" ± {s:.4f}" if s is not None else "")
+                     + f"\n{source}{', ' if source and when else ''}{when}" for w, v, s, n in pts])
     if any(s is not None for s in ss):
         lo = [y - (s or 0) for y, s in zip(ys, ss)]
         hi = [y + (s or 0) for y, s in zip(ys, ss)]
@@ -508,7 +625,8 @@ def plot_spectra(fig, samples, sensors, single=None, labels=None):
                 st = _sensor_style(s, labels, i)
                 colour = single["color"] if s == "s2" else ("#555555" if s == "landsat" else st["colour"])
                 name = st["label"] if s not in SENSOR_STYLE else (res["spacecraft"] or st["label"])
-                _draw_spectrum(ax, res, colour, st, f"{name} · {res['date']} ({res['days']:+d} d)")
+                _draw_spectrum(ax, res, colour, st, f"{name} · {res['date']} ({res['days']:+d} d)",
+                               single["name"], name)
                 drawn += 1
         if drawn:
             ax.legend(fontsize=7, loc="upper left", frameon=False)
@@ -524,7 +642,8 @@ def plot_spectra(fig, samples, sensors, single=None, labels=None):
                 res = (q.get("results") or {}).get(s)
                 if res:
                     _draw_spectrum(ax, res, q["color"], {"ls": "-", "marker": st["marker"]},
-                                   f"{q['name']} · {res['date']} ({res['days']:+d} d)")
+                                   f"{q['name']} · {res['date']} ({res['days']:+d} d)",
+                                   q["name"], res.get("spacecraft") or st["label"])
                     drawn += 1
             if drawn:
                 ax.legend(fontsize=7, loc="upper left", frameon=False, ncol=1 if drawn <= 5 else 2)
