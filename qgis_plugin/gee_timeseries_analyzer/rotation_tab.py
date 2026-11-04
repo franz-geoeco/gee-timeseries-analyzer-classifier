@@ -7,7 +7,6 @@ the tab computes the class areas per year, the transition matrix of every
 pair of consecutive years and a flow diagram, writes a change map for a
 chosen pair and exports the tables as CSV. analysis_tools.py does the work.
 """
-import json
 import os
 import re
 

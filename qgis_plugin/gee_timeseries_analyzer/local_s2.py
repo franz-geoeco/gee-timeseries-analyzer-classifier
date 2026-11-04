@@ -15,7 +15,7 @@ import json
 import os
 import re
 import zipfile
-import xml.etree.ElementTree as ET
+from xml.parsers import expat
 
 import numpy as np
 
@@ -27,9 +27,52 @@ SCL_BAD = (1, 3, 8, 9, 10)                         # saturated, cloud shadow, cl
 _BAND_FILE = re.compile(r"_(B\d{2}|B8A|SCL|TCI)_(10|20|60)m\.jp2$", re.I)
 
 
-def _xml_text(root, tag):
-    el = next((e for e in root.iter() if e.tag.split("}")[-1] == tag), None)
-    return el.text.strip() if el is not None and el.text else None
+class _El:
+    __slots__ = ("tag", "attrib", "text")
+
+    def __init__(self, tag, attrib):
+        self.tag, self.attrib, self.text = tag, attrib, ""
+
+    def get(self, key, default=None):
+        return self.attrib.get(key, default)
+
+
+def _parse_xml(data):
+    """Elements of an XML document in document order (tag without namespace
+    prefix, attributes, own text). Plain expat with every DTD / entity
+    declaration refused, so entity expansion ("billion laughs") and external
+    entities are impossible -- the protection of defusedxml without the extra
+    dependency. Sentinel-2 metadata never contains a DTD."""
+    def refuse(*_):
+        raise ValueError("XML with a DTD or entity declarations is not accepted.")
+
+    els, stack = [], []
+
+    def start(name, attrs):
+        el = _El(name.split(":")[-1], attrs)
+        els.append(el)
+        stack.append(el)
+
+    def end(_name):
+        stack.pop()
+
+    def chars(text):
+        if stack:
+            stack[-1].text += text
+
+    p = expat.ParserCreate()
+    p.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    p.StartDoctypeDeclHandler = refuse
+    p.EntityDeclHandler = refuse
+    p.ExternalEntityRefHandler = refuse
+    p.StartElementHandler, p.EndElementHandler, p.CharacterDataHandler = start, end, chars
+    p.Parse(data, True)
+    return els
+
+
+def _xml_text(els, tag):
+    el = next((e for e in els if e.tag == tag), None)
+    return el.text.strip() if el is not None and el.text.strip() else None
 
 
 def open_scene(path):
@@ -52,7 +95,7 @@ def open_scene(path):
                              "MTD_MSIL2A.xml.")
         xml = open(mtd_path, "rb").read()
         files = [os.path.join(r, f) for r, _, fs in os.walk(safe) for f in fs]
-    root = ET.fromstring(xml)
+    root = _parse_xml(xml)
 
     best = {}                                       # band -> (resolution, file), finest wins
     for f in files:
@@ -66,12 +109,12 @@ def open_scene(path):
         raise ValueError(f"Bands missing in the product: {', '.join(missing)}")
 
     phys = {}                                       # bandId -> physical band (B1 ... B12)
-    for e in root.iter():
-        if e.tag.split("}")[-1] == "Spectral_Information" and e.get("physicalBand"):
+    for e in root:
+        if e.tag == "Spectral_Information" and e.get("physicalBand"):
             phys[e.get("bandId")] = e.get("physicalBand")
     offsets = {}
-    for e in root.iter():
-        if e.tag.split("}")[-1] == "BOA_ADD_OFFSET":
+    for e in root:
+        if e.tag == "BOA_ADD_OFFSET":
             offsets[phys.get(e.get("band_id"), "")] = float(e.text)
     quant = float(_xml_text(root, "BOA_QUANTIFICATION_VALUE") or 10000)
     start = _xml_text(root, "PRODUCT_START_TIME") or ""

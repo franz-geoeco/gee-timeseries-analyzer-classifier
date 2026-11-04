@@ -13,7 +13,7 @@ import os
 
 from qgis.core import (
     QgsApplication, QgsProject, QgsGeometry, QgsCoordinateTransform, QgsWkbTypes, QgsPointXY,
-    QgsMapLayerProxyModel, QgsRectangle,
+    QgsMapLayerProxyModel,
 )
 from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QDate

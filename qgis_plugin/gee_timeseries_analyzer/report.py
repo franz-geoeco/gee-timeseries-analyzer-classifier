@@ -246,6 +246,7 @@ def _cv_section(cv, classes_by_code):
 
 def _figures(result, m, names, colours):
     out = []
+    note = ""
     model = result["model"]
     try:
         from . import analysis_tools as at
@@ -257,8 +258,8 @@ def _figures(result, m, names, colours):
                                   f"Class profile: {var} ({red}), mean ± 1σ of the training samples")
             fig.tight_layout()
             out.append((f"Class profile {var} ({red})", _png(fig)))
-    except Exception:
-        pass
+    except Exception as e:                          # profiles are optional: report without them
+        note = f"<p style='color:var(--muted)'>Class profiles not available ({_e(type(e).__name__)}: {_e(e)}).</p>"
     if m:
         n = len(m["codes"])
         fig = Figure(figsize=(8, max(2.5, 0.85 + 0.32 * n)))
@@ -276,7 +277,7 @@ def _figures(result, m, names, colours):
         p.importance_axis(fig.add_subplot(111), imp, 30)
         fig.tight_layout()
         out.append((f"Variable importance (top {len(top)} of {len(imp)})", _png(fig)))
-    return "".join(f"<figure><img src='data:image/png;base64,{b64}' alt='{_e(t)}'><figcaption>{_e(t)}</figcaption>"
+    return note + "".join(f"<figure><img src='data:image/png;base64,{b64}' alt='{_e(t)}'><figcaption>{_e(t)}</figcaption>"
                    f"</figure>" for t, b64 in out)
 
 

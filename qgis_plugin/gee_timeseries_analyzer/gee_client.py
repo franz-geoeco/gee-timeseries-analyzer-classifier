@@ -128,8 +128,8 @@ def ensure_initialised(project=None, force=False):
             ee.Number(1).getInfo()
             _initialised = True
             return ee
-        except Exception:
-            pass
+        except Exception:                           # not initialised yet -> initialise below
+            _initialised = False
     ee.Initialize(project=project or ee_plugin_project())
     ee.Number(1).getInfo()
     _initialised = True

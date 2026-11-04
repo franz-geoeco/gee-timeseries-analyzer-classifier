@@ -31,7 +31,7 @@ from qgis.gui import QgsMapLayerComboBox, QgsCollapsibleGroupBox
 from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QColor, QBrush, QDesktopServices
 from qgis.PyQt.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QTabWidget,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget,
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
     QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QColorDialog, QProgressBar, QStackedWidget, QListWidget, QListWidgetItem,
