@@ -37,7 +37,9 @@ The dock has four sections. Every group and the less obvious settings have an **
 - **Surface-reflectance spectra** of points and polygons, anywhere on Earth, for a chosen **date**. For each sensor, Sentinel-2 SR (10 m) and Landsat 8/9 C2 L2 (30 m), the image **closest in time** within a search window is used. With the cloud mask on, only an image that is clear at that spot counts. The date and day difference are shown per sample.
 - Add samples by clicking a point, drawing a polygon, or taking the selected features of a layer. Points give the pixel value; polygons give mean ± standard deviation.
 - Charts show all samples per sensor, or both sensors of one sample, with the visible, red-edge, NIR and SWIR regions marked.
-- *Show images on map* adds the true-colour scene of the closest day. The spectra can be exported as CSV.
+- **Local Sentinel-2 L2A scenes** (`.SAFE.zip` as downloaded, or an unzipped `.SAFE` folder) can be added as further sources, **offline**. Bands are read at their finest resolution, with the product's reflectance offset and the SCL cloud mask applied, and are compared directly with the Earth Engine sensors.
+- Samples can be renamed in the table. When features are taken from a layer, their names come from a chosen column.
+- *Show images on map* adds the true-colour scene of the closest day (and the TCI of local scenes). The spectra can be exported as CSV.
 
 ### Time series
 - **Polygons** come from several sources: draw them on the map, import them from any layer or file (SHP, GPKG, GeoJSON, KML…), click fields of a layer (*Field Inspector*), or download a GEE table asset as a styled layer.

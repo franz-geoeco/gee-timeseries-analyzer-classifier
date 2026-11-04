@@ -1,10 +1,11 @@
 """The Spectra section: surface-reflectance spectra of points and polygons
 from the Sentinel-2 / Landsat 8-9 image closest to a chosen date, anywhere
-on Earth (spectral.py does the Earth Engine work).
+on Earth (spectral.py does the Earth Engine work), and from local Sentinel-2
+L2A scenes (local_s2.py, offline).
 
 Samples come from a click on the map, a drawn polygon or the selected
 features of a layer; each is sampled in a background task (further clicks
-are queued). Charts: all samples per sensor, or both sensors of one sample.
+are queued). Charts: all samples per sensor, or all sensors of one sample.
 """
 import csv
 import json
@@ -14,17 +15,19 @@ from qgis.core import (
     QgsApplication, QgsProject, QgsGeometry, QgsCoordinateTransform, QgsWkbTypes, QgsPointXY,
     QgsMapLayerProxyModel, QgsRectangle,
 )
-from qgis.gui import QgsMapLayerComboBox, QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker
+from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker
 from qgis.PyQt.QtCore import Qt, QDate
 from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QPushButton, QLabel, QSpinBox,
     QCheckBox, QComboBox, QDateEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QFileDialog,
-    QProgressBar, QHeaderView,
+    QProgressBar, QHeaderView, QListWidget, QListWidgetItem,
 )
+from qgis.core import QgsRasterLayer, NULL
 
 from . import gee_client as c
 from . import help_texts as H
+from . import local_s2 as ls
 from . import plotting as p
 from . import polygon_layer as pl
 from . import spectral as sp
@@ -32,6 +35,21 @@ from . import style
 from .tasks import CallTask
 
 MAX_SAMPLES = 10
+
+
+def _sample_all(geojson, sensors, date, window_days, max_cloud, cloud_mask, min_clear, scenes,
+                progress_cb=None, cancel_cb=None):
+    """Earth Engine sensors (closest image) + local scenes -> {key: result or None}."""
+    out = {}
+    ee_keys = [s for s in sensors if s in sp.SENSORS]
+    if ee_keys:
+        out.update(sp.sample(geojson, ee_keys, date, window_days, max_cloud, cloud_mask, min_clear,
+                             progress_cb, cancel_cb))
+    for key in [s for s in sensors if s in scenes]:
+        if cancel_cb is not None and cancel_cb():
+            raise InterruptedError("Cancelled")
+        out[key] = ls.sample_scene(scenes[key], geojson, date, cloud_mask, min_clear)
+    return out
 IMAGE_GROUP = "GEE spectra images"
 try:
     from qgis.core import Qgis
@@ -47,6 +65,8 @@ class SpectraTab(QWidget):
         self.iface = dock.iface
         self.canvas = dock.canvas
         self.samples = []          # {id, name, color, geojson, kind, results, marker}
+        self.scenes = {}           # key -> local Sentinel-2 L2A scene (local_s2.open_scene)
+        self._next_scene = 1
         self._next_id = 1
         self._queue = []
         self._task = None
@@ -87,7 +107,29 @@ class SpectraTab(QWidget):
             cb.setChecked(True)
             srow.addWidget(cb)
         srow.addStretch(1)
-        form.addRow("Sensors:", srow)
+        form.addRow("Earth Engine:", srow)
+        self.scene_list = QListWidget()
+        self.scene_list.setMaximumHeight(70)
+        self.scene_list.setToolTip("Local Sentinel-2 L2A scenes: tick to include them in the sampling")
+        self.scene_list.itemChanged.connect(self._mark_stale)
+        lrow2 = QHBoxLayout()
+        b_add = QPushButton("Add scenes…")
+        b_add.setToolTip("Sentinel-2 L2A .SAFE.zip, or MTD_MSIL2A.xml of an unzipped .SAFE folder")
+        b_add.clicked.connect(self.on_add_scenes)
+        b_rm = QPushButton("Remove")
+        b_rm.clicked.connect(self.on_remove_scenes)
+        lrow2.addWidget(b_add)
+        lrow2.addWidget(b_rm)
+        lrow2.addStretch(1)
+        lrow2.addWidget(style.InfoButton(H.SPECTRA_LOCAL))
+        lbox = QVBoxLayout()
+        lbox.setSpacing(3)
+        lbox.addWidget(self.scene_list)
+        lbox.addLayout(lrow2)
+        lw = QWidget()
+        lw.setLayout(lbox)
+        lbox.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Local scenes:", lw)
         crow = QHBoxLayout()
         self.chk_mask = QCheckBox("Cloud mask")
         self.chk_mask.setChecked(True)
@@ -132,6 +174,14 @@ class SpectraTab(QWidget):
         lrow.addWidget(self.layer, 1)
         lrow.addWidget(btn_sel)
         sl.addLayout(lrow)
+        nrow = QHBoxLayout()
+        nrow.addWidget(QLabel("Name from column:"))
+        self.name_field = QgsFieldComboBox()
+        self.name_field.setAllowEmptyFieldName(True)
+        self.name_field.setToolTip("Column used to name the added features (empty: layer name + feature id)")
+        self.layer.layerChanged.connect(self.name_field.setLayer)
+        nrow.addWidget(self.name_field, 1)
+        sl.addLayout(nrow)
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Sample", "Sentinel-2", "Landsat 8/9"])
@@ -141,6 +191,8 @@ class SpectraTab(QWidget):
         self.tree.setMinimumHeight(110)
         self.tree.setMaximumHeight(190)
         self.tree.itemClicked.connect(self._on_tree_click)
+        self.tree.itemChanged.connect(self._on_tree_renamed)
+        self.tree.setToolTip("Double click a name to rename the sample")
         sl.addWidget(self.tree)
         brow = QHBoxLayout()
         for label, slot in (("Remove selected", self.on_remove), ("Clear all", self.on_clear),
@@ -234,7 +286,11 @@ class SpectraTab(QWidget):
                 continue
             if g.type() == QgsWkbTypes.PointGeometry:
                 g = QgsGeometry.fromPointXY(g.asMultiPoint()[0] if g.isMultipart() else g.asPoint())
-            self._add_sample(self._to_wgs84(g, layer.crs()), f"{layer.name()} #{f.id()}")
+            field = self.name_field.currentField()
+            value = f[field] if field and layer.fields().indexOf(field) >= 0 else None
+            name = str(value) if value is not None and value != NULL and str(value).strip() else \
+                f"{layer.name()} #{f.id()}"
+            self._add_sample(self._to_wgs84(g, layer.crs()), name)
 
     # ------------------------------------------------------------------
     # Samples
@@ -294,6 +350,10 @@ class SpectraTab(QWidget):
 
     def _settings(self):
         sensors = [k for k, cb in (("s2", self.chk_s2), ("landsat", self.chk_ls)) if cb.isChecked()]
+        for i in range(self.scene_list.count()):
+            it = self.scene_list.item(i)
+            if it.checkState() == Qt.Checked:
+                sensors.append(it.data(Qt.UserRole))
         return {"sensors": sensors, "date": self.date.date().toString("yyyy-MM-dd"),
                 "window_days": self.window.value(), "max_cloud": self.max_cloud.value(),
                 "cloud_mask": self.chk_mask.isChecked(), "min_clear": self.min_clear.value() / 100.0}
@@ -308,10 +368,10 @@ class SpectraTab(QWidget):
             return
         settings = self._settings()
         if not settings["sensors"]:
-            self.dock._warn("Tick at least one sensor.")
+            self.dock._warn("Tick at least one sensor or local scene.")
             self._queue = []
             return
-        if not self.dock._ensure_ee():
+        if any(k in sp.SENSORS for k in settings["sensors"]) and not self.dock._ensure_ee():
             self._queue = []
             return
         sid = self._queue.pop(0)
@@ -320,7 +380,9 @@ class SpectraTab(QWidget):
             self._process_next()
             return
         s["settings"] = settings
-        self._task = CallTask(f"Spectrum of {s['name']}", sp.sample, dict(settings, geojson=s["geojson"]),
+        scenes = {k: v for k, v in self.scenes.items() if k in settings["sensors"]}
+        self._task = CallTask(f"Spectrum of {s['name']}", _sample_all,
+                              dict(settings, geojson=s["geojson"], scenes=scenes),
                               lambda task, ok, sid=sid: self._on_done(task, ok, sid))
         self._task.progressText.connect(self.status.setText)
         self.progress.setRange(0, 0)
@@ -336,9 +398,9 @@ class SpectraTab(QWidget):
             self.dock._error(f"Sampling failed: {task.exception}")
         elif ok and s is not None:
             s["results"] = task.result
-            missing = [sp.SENSORS[k]["label"] for k, v in task.result.items() if v is None]
-            self.status.setText(f"{s['name']} sampled." + (f" No clear image within ± {self.window.value()} days "
-                                                           f"for {', '.join(missing)}." if missing else ""))
+            missing = [self._label(k) for k, v in task.result.items() if v is None]
+            self.status.setText(f"{s['name']} sampled." + (f" No clear data for: {', '.join(missing)} "
+                                                           "(outside the scene / window or masked)." if missing else ""))
         self._refresh_tree()
         self._fill_view()
         self._redraw()
@@ -347,24 +409,58 @@ class SpectraTab(QWidget):
     def _sample(self, sid):
         return next((s for s in self.samples if s["id"] == sid), None)
 
+    def _label(self, key):
+        if key in sp.SENSORS:
+            return sp.SENSORS[key]["label"]
+        return ls.scene_label(self.scenes[key]) if key in self.scenes else key
+
+    def _columns(self):
+        keys = []
+        for s in self.samples:
+            for k in (s.get("results") or {}):
+                if k not in keys:
+                    keys.append(k)
+        for k in self._settings()["sensors"]:
+            if k not in keys:
+                keys.append(k)
+        return keys
+
     def _refresh_tree(self):
+        keys = self._columns()
+        self.tree.blockSignals(True)
         self.tree.clear()
+        self.tree.setColumnCount(1 + len(keys))
+        self.tree.setHeaderLabels(["Sample"] + [self._label(k) for k in keys])
         for s in self.samples:
             cells = [s["name"]]
-            for k in ("s2", "landsat"):
+            for k in keys:
                 res = (s.get("results") or {}).get(k) if s.get("results") else None
                 if s.get("results") is None:
                     cells.append("…" if s["id"] in self._queue or self._task else "")
                 elif k not in s["results"]:
                     cells.append("–")
                 elif res is None:
-                    cells.append("none in window")
+                    cells.append("no data")
                 else:
                     cells.append(f"{res['date']} ({res['days']:+d} d)")
             it = QTreeWidgetItem(cells)
             it.setIcon(0, QIcon(self._swatch(s["color"])))
             it.setData(0, Qt.UserRole, s["id"])
+            it.setFlags(it.flags() | Qt.ItemIsEditable)
             self.tree.addTopLevelItem(it)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree.blockSignals(False)
+
+    def _on_tree_renamed(self, item, col):
+        if col != 0:
+            return
+        s = self._sample(item.data(0, Qt.UserRole))
+        name = item.text(0).strip()
+        if s is None or not name or name == s["name"]:
+            return
+        s["name"] = name
+        self._fill_view()
+        self._redraw()
 
     @staticmethod
     def _swatch(colour):
@@ -408,6 +504,34 @@ class SpectraTab(QWidget):
             self._enqueue(s["id"])
         self._refresh_tree()
 
+    def on_add_scenes(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Sentinel-2 L2A scenes", "", "Sentinel-2 L2A (*.zip MTD_MSIL2A.xml);;All files (*)")
+        for path in paths:
+            try:
+                scene = self.dock._run_busy(ls.open_scene, path)
+            except Exception as e:
+                self.dock._error(f"{os.path.basename(path)}: {e}")
+                continue
+            if any(sc["path"] == scene["path"] for sc in self.scenes.values()):
+                continue
+            key = f"local{self._next_scene}"
+            self._next_scene += 1
+            self.scenes[key] = scene
+            it = QListWidgetItem(f"{ls.scene_label(scene)} · {scene['cloud']:.0f} % cloud")
+            it.setData(Qt.UserRole, key)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked)
+            it.setToolTip(f"{scene['product']} · processing baseline {scene['baseline']}")
+            self.scene_list.addItem(it)
+        self._refresh_tree()
+
+    def on_remove_scenes(self):
+        for it in self.scene_list.selectedItems():
+            self.scenes.pop(it.data(Qt.UserRole), None)
+            self.scene_list.takeItem(self.scene_list.row(it))
+        self._refresh_tree()
+
     def _mark_stale(self, *_):
         if self.samples:
             self.status.setText("Settings changed — press 'Re-sample all' to update the spectra.")
@@ -421,22 +545,23 @@ class SpectraTab(QWidget):
         self.view.clear()
         self.view.addItem("All samples — one panel per sensor", None)
         for s in self.samples:
-            self.view.addItem(QIcon(self._swatch(s["color"])), f"{s['name']} — both sensors", s["id"])
+            self.view.addItem(QIcon(self._swatch(s["color"])), f"{s['name']} — all sensors", s["id"])
         i = self.view.findData(current)
         self.view.setCurrentIndex(i if i >= 0 else 0)
         self.view.blockSignals(False)
 
     def _redraw(self):
         done = [s for s in self.samples if s.get("results")]
-        sensors = [k for k in ("s2", "landsat") if any(k in s["results"] for s in done)] or \
+        sensors = [k for k in self._columns() if any(k in s["results"] for s in done)] or \
             self._settings()["sensors"] or ["s2"]
         sid = self.view.currentData()
         single = self._sample(sid) if sid is not None else None
         if single is not None and not single.get("results"):
             p.plot_placeholder(self.plot.figure, "Still sampling …")
         else:
-            p.plot_spectra(self.plot.figure, done, sensors, single)
-        self.plot.canvas.setMinimumHeight(460 if single is not None or len(sensors) == 1 else 620)
+            p.plot_spectra(self.plot.figure, done, sensors, single, {k: self._label(k) for k in sensors})
+        self.plot.canvas.setMinimumHeight(460 if single is not None or len(sensors) == 1
+                                          else 310 * len(sensors))
         self.plot.redraw()
 
     # ------------------------------------------------------------------
@@ -444,7 +569,7 @@ class SpectraTab(QWidget):
     # ------------------------------------------------------------------
     def on_show_images(self):
         settings = self._settings()
-        if not settings["sensors"] or not self.dock._ensure_ee():
+        if not settings["sensors"]:
             return
         xform = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), pl.WGS84, QgsProject.instance())
         r = xform.transformBoundingBox(self.canvas.extent())
@@ -453,7 +578,18 @@ class SpectraTab(QWidget):
         root = project.layerTreeRoot()
         group = root.findGroup(IMAGE_GROUP) or root.insertGroup(0, IMAGE_GROUP)
         added = []
-        for k in settings["sensors"]:
+        for k in [k for k in settings["sensors"] if k in self.scenes]:
+            tci = ls.tci_path(self.scenes[k])
+            name = f"{ls.scene_label(self.scenes[k])} true colour"
+            if tci and not project.mapLayersByName(name):
+                layer = QgsRasterLayer(tci, name)
+                if layer.isValid():
+                    project.addMapLayer(layer, False)
+                    group.insertLayer(0, layer)
+                    added.append(name)
+        for k in [k for k in settings["sensors"] if k in sp.SENSORS]:
+            if not self.dock._ensure_ee():
+                break
             try:
                 res = self.dock._run_busy(sp.closest_image, k, bbox, settings["date"], settings["window_days"],
                                           settings["max_cloud"], settings["cloud_mask"])
@@ -498,7 +634,7 @@ class SpectraTab(QWidget):
                     for b, nm, wl, v, sd in zip(res["bands"], res["names"], res["wavelengths"], res["values"],
                                                 res["sd"]):
                         w.writerow([s["name"], s["kind"], round(cen.x(), 6), round(cen.y(), 6),
-                                    s["settings"]["date"], sp.SENSORS[k]["label"], res["spacecraft"], res["image"],
+                                    s["settings"]["date"], self._label(k), res["spacecraft"], res["image"],
                                     res["date"], res["days"], res["cloud"], res["clear"], b, nm, wl, v, sd])
         self.iface.messageBar().pushSuccess("Spectra", f"Saved {os.path.basename(path)}")
 

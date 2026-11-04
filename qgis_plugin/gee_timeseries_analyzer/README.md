@@ -9,6 +9,14 @@ A QGIS port of two Google Earth Engine Code Editor apps, a **time series analyze
 The dock has four sections, switched in its header:
 
 -   **Spectra**: surface-reflectance spectra of points and polygons from the Sentinel-2 and Landsat 8/9 image closest to a chosen date, anywhere on Earth. Images within a search window (± days) are searched per sensor. With the cloud mask, only images clear at the sample count (for polygons: a minimum clear share). Points give the pixel value; polygons give mean ± σ. Charts show all samples per sensor or both sensors of one sample. *Show images on map* adds the closest true-colour scenes (map view), and the spectra can be exported as CSV with band, wavelength, image ID and date difference.
+    -   **Local scenes** (*Add scenes…*): Sentinel-2 L2A products as `.SAFE.zip` (read without unzipping) or `MTD_MSIL2A.xml` of a `.SAFE` folder. Each ticked scene is sampled like a sensor, offline:
+        -   bands at their finest resolution (10/20/60 m) on a 10 m grid
+        -   `BOA_ADD_OFFSET` / `BOA_QUANTIFICATION_VALUE` from the metadata applied (baseline ≥ 04.00: −1000)
+        -   SCL cloud mask
+        -   a point outside the tile gives "no data"
+        -   *Show images on map* adds the scene's TCI
+        -   Earth Engine is only needed if its sensors are ticked
+    -   **Names**: double click a sample in the table to rename it. With *Add selected features*, *Name from column* sets the names (empty: layer name + feature id).
 -   **Time series**: the *Polygons*, *Analysis*, *Charts* and *Compare* tabs.
 -   **Classification**: the *Setup*, *Results*, *Class profiles*, *Training check* and *Crop rotation* tabs.
 -   **Export imagery**: composites and time-series stacks as GeoTIFF.

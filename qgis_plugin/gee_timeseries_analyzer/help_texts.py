@@ -108,6 +108,11 @@ REQUESTS = ("How many Earth Engine requests run at the same time: tile downloads
             "stacks, Export imagery) and the folds of an online cross-validation. 4–8 is usually fastest; "
             "Earth Engine limits concurrent requests per user, more can lead to retries or 'too many "
             "requests' errors.")
+SPECTRA_LOCAL = ("Local Sentinel-2 Level-2A scenes, e.g. a <i>.SAFE.zip</i> from the Copernicus Data Space "
+                 "(no need to unzip) or the <i>MTD_MSIL2A.xml</i> of an unzipped .SAFE folder. Each ticked scene "
+                 "is sampled like a sensor — offline, without Earth Engine: bands at their finest resolution, "
+                 "the product's reflectance offset (baseline ≥ 04.00: −1000) applied, SCL cloud mask as above. "
+                 "The day difference refers to the target date.")
 SPECTRA_CLOUD = ("<b>Cloud mask</b>: Sentinel-2 SCL (cloud, shadow, cirrus, saturated) / Landsat QA_PIXEL "
                  "(cloud, dilated cloud, shadow, cirrus). With the mask, a date only counts if the point is "
                  "clear — or, for polygons, at least the given share of the polygon. <b>Scenes ≤ x % cloud</b> "

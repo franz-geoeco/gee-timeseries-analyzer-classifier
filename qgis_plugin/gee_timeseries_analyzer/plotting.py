@@ -479,33 +479,45 @@ def _draw_spectrum(ax, res, colour, style, label):
         ax.fill_between(xs, lo, hi, color=colour, alpha=0.12, lw=0)
 
 
-def plot_spectra(fig, samples, sensors, single=None):
+LOCAL_COLOURS = ["#8e44ad", "#d35400", "#16a085", "#2c3e50", "#c0392b", "#7f8c8d"]
+
+
+def _sensor_style(s, labels, i):
+    st = SENSOR_STYLE.get(s)
+    if st is not None:
+        return dict(st, label=(labels or {}).get(s, st["label"]))
+    return {"ls": ":", "marker": "^", "label": (labels or {}).get(s, s), "colour": LOCAL_COLOURS[i % len(LOCAL_COLOURS)]}
+
+
+def plot_spectra(fig, samples, sensors, single=None, labels=None):
     """samples: [{id, name, color, results: {sensor: closest_spectrum dict
-    or None}}]. single=None -> one panel per sensor with all samples;
-    single=<sample> -> both sensors of one sample in one panel."""
+    or None}}]; sensors: keys ("s2", "landsat", local scene keys); labels:
+    {key: panel / legend label}. single=None -> one panel per sensor with
+    all samples; single=<sample> -> all sensors of one sample in one panel."""
     fig.clear()
     if not samples:
         plot_placeholder(fig, "Click a point or draw a polygon on the map to sample a spectrum.")
         return
     if single is not None:
         ax = fig.add_subplot(111)
-        _spectrum_axis(ax, f"{single['name']} — both sensors")
+        _spectrum_axis(ax, f"{single['name']} — all sensors")
         drawn = 0
-        for s in sensors:
+        for i, s in enumerate(sensors):
             res = (single.get("results") or {}).get(s)
             if res:
-                st = SENSOR_STYLE[s]
-                _draw_spectrum(ax, res, single["color"] if s == "s2" else "#555555", st,
-                               f"{res['spacecraft'] or st['label']} · {res['date']} ({res['days']:+d} d)")
+                st = _sensor_style(s, labels, i)
+                colour = single["color"] if s == "s2" else ("#555555" if s == "landsat" else st["colour"])
+                name = st["label"] if s not in SENSOR_STYLE else (res["spacecraft"] or st["label"])
+                _draw_spectrum(ax, res, colour, st, f"{name} · {res['date']} ({res['days']:+d} d)")
                 drawn += 1
         if drawn:
             ax.legend(fontsize=7, loc="upper left", frameon=False)
         else:
-            _empty(ax, "No clear image within the search window.")
+            _empty(ax, "No clear image for this sample.")
     else:
         axes = fig.subplots(len(sensors), 1, squeeze=False)[:, 0]
-        for ax, s in zip(axes, sensors):
-            st = SENSOR_STYLE[s]
+        for i, (ax, s) in enumerate(zip(axes, sensors)):
+            st = _sensor_style(s, labels, i)
             _spectrum_axis(ax, st["label"])
             drawn = 0
             for q in samples:
@@ -517,7 +529,7 @@ def plot_spectra(fig, samples, sensors, single=None):
             if drawn:
                 ax.legend(fontsize=7, loc="upper left", frameon=False, ncol=1 if drawn <= 5 else 2)
             else:
-                _empty(ax, "No clear image within the search window.")
+                _empty(ax, "No clear data for the samples (outside the scene / window, or masked).")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 1, 0.97))      # room for the title above the region labels

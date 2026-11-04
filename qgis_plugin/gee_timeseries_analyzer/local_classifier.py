@@ -146,7 +146,7 @@ def _polygon_layer(polygons, wkt):
     for s in (src, dst):
         s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     xform = osr.CoordinateTransformation(src, dst)
-    ds = ogr.GetDriverByName("Memory").CreateDataSource("polys")
+    ds = (ogr.GetDriverByName("MEM") or ogr.GetDriverByName("Memory")).CreateDataSource("polys")
     lyr = ds.CreateLayer("polys", dst, ogr.wkbMultiPolygon)
     lyr.CreateField(ogr.FieldDefn("pid", ogr.OFTInteger))
     env = None
