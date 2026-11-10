@@ -35,7 +35,6 @@ from qgis.PyQt.QtWidgets import (
     QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
     QGroupBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QColorDialog, QProgressBar, QStackedWidget, QListWidget, QListWidgetItem,
-    QSplitter,
 )
 
 from . import classification as k
@@ -88,6 +87,7 @@ class ClassificationTab(QWidget):
         self._train_layer_used = None   # QGIS layer of the last training run (training check)
         self._suspicious = None
         self.result = None         # last train / apply result
+        self._precheck = None      # last "Check training data" result (before training)
         self._task = None
         self._build_ui()
 
@@ -137,10 +137,16 @@ class ClassificationTab(QWidget):
         self.btn_train = QPushButton("Train && classify")
         style.primary(self.btn_train)
         self.btn_train.clicked.connect(self.on_train)
+        self.btn_check = QPushButton("Check training data")
+        self.btn_check.setToolTip("Training check before training: builds the features, samples all labelled "
+                                  "polygons and flags suspicious ones (Training check tab) -- no classifier, "
+                                  "no map, no accuracy assessment, so much faster")
+        self.btn_check.clicked.connect(self.on_check)
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.on_cancel)
         run_row.addWidget(self.btn_train, 1)
+        run_row.addWidget(self.btn_check)
         run_row.addWidget(self.btn_cancel)
         layout.addLayout(run_row)
 
@@ -537,7 +543,11 @@ class ClassificationTab(QWidget):
 
     def _build_results(self):
         w = QWidget()
-        layout = QVBoxLayout(w)
+        outer = QVBoxLayout(w)
+        split = style.Splitter("classification_results")
+        top = QWidget()
+        layout = QVBoxLayout(top)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.res_info = QLabel("No classification yet.")
         self.res_info.setWordWrap(True)
         self.res_info.setTextFormat(Qt.RichText)
@@ -546,6 +556,10 @@ class ClassificationTab(QWidget):
         self.res_plot = PlotPanel()
         p.plot_placeholder(self.res_plot.figure, "No classification yet.")
         layout.addWidget(self.res_plot, 1)
+        split.add(top, stretch=1)
+        bottom = QWidget()
+        layout = QVBoxLayout(bottom)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         fld = QGroupBox("Field-level results")
         fform = QFormLayout(fld)
@@ -627,6 +641,10 @@ class ClassificationTab(QWidget):
         vrow.addWidget(btn_trees)
         vrow.addWidget(btn_csv)
         layout.addLayout(vrow)
+        layout.addStretch(1)
+        split.add(style.scroll_pane(bottom), collapsible=True)
+        split.set_defaults([None, bottom.sizeHint().height() + 4])
+        outer.addWidget(split, 1)
         return w
 
     @staticmethod
@@ -917,6 +935,7 @@ class ClassificationTab(QWidget):
         self.progress.show()
         self.btn_cancel.setEnabled(True)
         self.btn_train.setEnabled(False)
+        self.btn_check.setEnabled(False)
         self.btn_apply.setEnabled(False)
         self._set_status(f"{description} …")
         QgsApplication.taskManager().addTask(self._task)
@@ -1076,6 +1095,59 @@ class ClassificationTab(QWidget):
         kwargs["workers"] = self.requests.value()
         self._start(f"Training the {self.year.value()} classification", k.run_training, kwargs)
 
+    def on_check(self):
+        """Training check before training (much faster than Train & classify)."""
+        if self._task is not None:
+            return
+        if not self._classes_current():
+            return
+        seed = int(self._classifier().get("seed", 42))
+        common = {"classes": [dict(q) for q in self.classes], "sampling": self.sampling.currentData(),
+                  "max_per_class": self.max_px.value(), "seed": seed}
+        if self._local():
+            if self.train_kind.currentIndex() != 0:
+                self.dock._warn("Offline, the training polygons must be a QGIS layer (download the asset as a "
+                                "layer on the Polygons tab first).")
+                return
+            stack = self._stack_path(self.train_raster)
+            if stack is None:
+                self.dock._warn("Choose (or download) a training stack.")
+                return
+            try:
+                training = self._training_source()
+                self._remember_train_layer()
+            except (ValueError, RuntimeError) as e:
+                self.dock._warn(str(e))
+                return
+            self._start("Checking the training data (local stack)", lc.run_local_check,
+                        dict(common, train_stack=stack, training=training), on_done=self._on_check_done)
+            return
+        f = self._features()
+        if self.recipe.problem(f):
+            self.dock._warn(self.recipe.problem(f))
+            return
+        if not self.dock._ensure_ee():
+            return
+        try:
+            training = self._training_source()
+            self._remember_train_layer()
+        except ValueError as e:
+            self.dock._warn(str(e))
+            return
+        self._start(f"Checking the {self.year.value()} training data", k.run_check,
+                    dict(common, year=self.year.value(), features=f, training=training),
+                    on_done=self._on_check_done)
+
+    def _on_check_done(self, task, ok):
+        if not self._finish(task, ok, "Training check"):
+            return
+        self._precheck = task.result
+        self._refresh_check()
+        self.inner.setCurrentIndex(3)
+        n_flag = len(self._flagged_ids())
+        self._set_status(f"Training check: {n_flag} of {task.result['n_polygons']} polygon(s) flagged "
+                         f"({task.result['n_pixels']} pixels sampled) — see the Training check tab.")
+
     def on_apply(self):
         if self._task is not None or self.model is None:
             return
@@ -1122,6 +1194,7 @@ class ClassificationTab(QWidget):
         self.progress.hide()
         self.btn_cancel.setEnabled(False)
         self.btn_train.setEnabled(True)
+        self.btn_check.setEnabled(True)
         self._update_model_buttons()
         if task.exception is not None:
             self.dock._error(f"{what} failed: {task.exception}")
@@ -1137,6 +1210,7 @@ class ClassificationTab(QWidget):
             return
         res = task.result
         self.result = res
+        self._precheck = None          # the Training check tab now shows this training's samples
         self.model = res["model"]
         self.model_info.setText(k.model_summary(self.model))
         self._update_model_buttons()
@@ -1494,7 +1568,7 @@ class ClassificationTab(QWidget):
             b.clicked.connect(lambda _=False, s=state: self._prof_check_all(s))
             row.addWidget(b)
         lay.addLayout(row)
-        split = QSplitter(Qt.Horizontal)
+        split = style.Splitter("class_profiles", Qt.Horizontal)
         self.prof_classes = QListWidget()
         self.prof_classes.itemChanged.connect(lambda *_: self._draw_profiles())
         self.prof_plot = PlotPanel()
@@ -1502,7 +1576,7 @@ class ClassificationTab(QWidget):
         p.plot_placeholder(self.prof_plot.figure, "Train or load a model to see the class profiles.")
         split.addWidget(self.prof_classes)
         split.addWidget(self.prof_plot)
-        split.setSizes([150, 520])
+        split.set_defaults([150, None])
         lay.addWidget(split, 1)
         hint = QLabel("Mean ± 1 standard deviation of the model's training samples per class and period "
                       "(pooled samples included). Overlapping bands explain confusions in the matrix.")
@@ -1587,25 +1661,29 @@ class ClassificationTab(QWidget):
         brow = QHBoxLayout()
         b_sel = QPushButton("Select flagged on map")
         b_sel.clicked.connect(self._select_flagged)
-        b_ex = QPushButton("Exclude flagged && retrain")
+        b_ex = self.btn_exclude = QPushButton("Exclude flagged && retrain")
         b_ex.clicked.connect(self._exclude_flagged)
         b_clear = QPushButton("Clear exclusions")
         b_clear.clicked.connect(self._clear_exclusions)
         for b in (b_sel, b_ex, b_clear):
             brow.addWidget(b)
         lay.addLayout(brow)
-        self.chk_info = QLabel("Run a training to check the training samples.")
+        self.chk_info = QLabel("Press 'Check training data' (Setup tab) to check the training polygons before "
+                               "training, or run a training.")
         self.chk_info.setWordWrap(True)
         self.chk_info.setStyleSheet("color:#666")
         lay.addWidget(self.chk_info)
         return w
 
     def _refresh_check(self):
-        res = self.result
+        res = self._precheck or self.result
+        pre = res is not None and res.get("check_only", False)
+        self.btn_exclude.setText("Exclude flagged && check again" if pre else "Exclude flagged && retrain")
         self.chk_table.setRowCount(0)
         self._suspicious = None
         if res is None or res.get("train_df") is None:
-            self.chk_info.setText("Run a training to check the training samples (applied models have none).")
+            self.chk_info.setText("Press 'Check training data' (Setup tab) to check the training polygons before "
+                                  "training, or run a training (applied models have no samples).")
             return
         df = res["train_df"]
         df = df[~df[k.ID_PROP].astype(str).str.startswith("pooled")]
@@ -1629,8 +1707,9 @@ class ClassificationTab(QWidget):
         excl = len(self._active_exclusions())
         where = (f"layer '{self._train_layer_used.name()}'" if self._train_layer_used is not None
                  else "the asset (ids = system:index)")
-        self.chk_info.setText(f"{n_flag} of {len(sus)} training polygons flagged (training samples only; "
-                              f"test samples are not checked). Ids refer to {where}. "
+        scope = ("all labelled polygons, training and test; checked before training" if pre
+                 else "training samples only; test samples are not checked")
+        self.chk_info.setText(f"{n_flag} of {len(sus)} training polygons flagged ({scope}). Ids refer to {where}. "
                               f"{excl} polygon(s) currently excluded." + (" Click a row to show it on the map."
                                                                           if self._train_layer_used else ""))
 
@@ -1667,6 +1746,10 @@ class ClassificationTab(QWidget):
             self.excluded = set()
         self._excluded_key = key
         self.excluded |= set(ids)
+        if self._precheck is not None:
+            self._set_status(f"{len(self.excluded)} training polygon(s) excluded — checking again …")
+            self.on_check()
+            return
         self._set_status(f"{len(self.excluded)} training polygon(s) excluded — retraining …")
         self.on_train()
 

@@ -102,17 +102,17 @@ class RotationTab(QWidget):
 
         self.res_tabs = QTabWidget()
         # areas
-        aw = QWidget()
-        al = QVBoxLayout(aw)
+        aw = style.Splitter("rotation_areas")
         self.area_table = QTableWidget(0, 0)
         self.area_table.verticalHeader().setVisible(False)
         self.area_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.area_table.setMaximumHeight(220)
-        al.addWidget(self.area_table)
+        self.area_table.setMinimumHeight(60)
+        aw.add(self.area_table, collapsible=True)
         self.area_plot = PlotPanel()
         self.area_plot.canvas.setMinimumHeight(320)
         p.plot_placeholder(self.area_plot.figure, "Add yearly maps and press 'Compute rotation'.")
-        al.addWidget(self.area_plot, 1)
+        aw.add(self.area_plot, stretch=1)
+        aw.set_defaults([180, None])
         self.res_tabs.addTab(aw, "Areas")
         # transitions
         tw = QWidget()

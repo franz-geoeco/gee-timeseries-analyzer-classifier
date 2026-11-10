@@ -9,7 +9,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSource, QgsProcessingParameterExpression,
     QgsProcessingParameterString, QgsProcessingParameterEnum, QgsProcessingParameterNumber,
     QgsProcessingParameterFeatureSink, QgsProcessingParameterBoolean, QgsProcessingParameterFile,
-    QgsProcessingParameterRasterLayer, QgsProcessingParameterRasterDestination,
+    QgsProcessingParameterRasterLayer, QgsProcessingParameterRasterDestination, QgsProcessingParameterExtent,
     QgsFields, QgsField, QgsFeature, QgsFeatureSink, QgsWkbTypes, QgsGeometry,
     QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsExpression, QgsJsonUtils,
 )
@@ -48,6 +48,7 @@ class GEEProcessingProvider(QgsProcessingProvider):
         self.addAlgorithm(ApplyModelAlgorithm())
         self.addAlgorithm(FieldMajorityAlgorithm())
         self.addAlgorithm(TransitionMatrixAlgorithm())
+        self.addAlgorithm(ExportLocalS2Algorithm())
 
 
 class _Base(QgsProcessingAlgorithm):
@@ -441,3 +442,69 @@ class TransitionMatrixAlgorithm(_Base):
                              None if r.pct_of_from is None else float(r.pct_of_from), r.from_code != r.to_code])
             sink.addFeature(f, QgsFeatureSink.FastInsert)
         return {self.OUTPUT: dest}
+
+
+def local_s2_dir():
+    """Folder of the all-bands VRTs of local Sentinel-2 scenes (QGIS profile)."""
+    from qgis.core import QgsApplication
+    from . import local_s2 as ls
+    return os.path.join(QgsApplication.qgisSettingsDirPath(), *ls.VRT_SUBDIR)
+
+
+class ExportLocalS2Algorithm(_Base):
+    SCENE, EXTENT, VALUES, SCL, OUTPUT = "SCENE", "EXTENT", "VALUES", "SCL", "OUTPUT"
+    VALUE_OPTIONS = ["Surface reflectance 0-1 (Float32, NoData = NaN)",
+                     "Original L2A values (UInt16, scale / offset stored; half the size)"]
+
+    def name(self):
+        return "export_local_sentinel2"
+
+    def displayName(self):
+        return "Export local Sentinel-2 scene (all bands, 10 m)"
+
+    def shortHelpString(self):
+        return ("Writes a Sentinel-2 L2A product (.SAFE.zip, or MTD_MSIL2A.xml of a .SAFE folder) as one GeoTIFF: "
+                "B1 ... B12 at 10 m (20 / 60 m bands resampled by nearest neighbour), optionally SCL as the last "
+                "band. Unlike Export > Save As, the band names, central wavelengths (also as GDAL IMAGERY "
+                "metadata), product, sensing time, spacecraft, processing baseline and cloud cover are kept. "
+                "Reflectance applies BOA_ADD_OFFSET / BOA_QUANTIFICATION_VALUE (baseline >= 04.00: -1000). "
+                "Leave the extent empty for the whole 110 km tile (about 3 GB compressed as reflectance); "
+                "the extent is snapped outwards to the 10 m grid of the tile.")
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterFile(
+            self.SCENE, "Sentinel-2 L2A scene (.SAFE.zip or MTD_MSIL2A.xml)",
+            fileFilter="Sentinel-2 L2A (*.zip MTD_MSIL2A.xml);;All files (*)"))
+        self.addParameter(QgsProcessingParameterExtent(self.EXTENT, "Extent (empty = whole tile)", optional=True))
+        self.addParameter(QgsProcessingParameterEnum(self.VALUES, "Values", options=self.VALUE_OPTIONS, defaultValue=0))
+        self.addParameter(QgsProcessingParameterBoolean(self.SCL, "Add the scene classification (SCL) as last band",
+                                                        defaultValue=True))
+        self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, "All bands (10 m)"))
+
+    def processAlgorithm(self, parameters, context, feedback):
+        from . import local_s2 as ls
+        from osgeo import gdal
+        try:
+            scene = ls.open_scene(self.parameterAsFile(parameters, self.SCENE, context))
+            if scene.get("kind") == "raster":
+                raise ValueError("This is already a raster file; choose a Sentinel-2 L2A .SAFE.zip or "
+                                 "MTD_MSIL2A.xml.")
+            vrt = ls.build_vrt(scene, local_s2_dir())
+        except Exception as e:
+            raise QgsProcessingException(str(e))
+        bbox = None
+        if parameters.get(self.EXTENT):
+            crs = QgsCoordinateReferenceSystem.fromWkt(gdal.Open(vrt).GetProjection())
+            r = self.parameterAsExtent(parameters, self.EXTENT, context, crs)
+            if not r.isNull() and not r.isEmpty():
+                bbox = (r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
+        out = self.parameterAsOutputLayer(parameters, self.OUTPUT, context)
+        feedback.pushInfo(f"{scene['product']} -> {out}")
+        try:
+            ls.export_scene(scene, vrt, out, bbox,
+                            reflectance=self.parameterAsEnum(parameters, self.VALUES, context) == 0,
+                            include_scl=self.parameterAsBoolean(parameters, self.SCL, context),
+                            progress=feedback.setProgress, cancel=feedback.isCanceled)
+        except Exception as e:
+            raise QgsProcessingException("Cancelled." if feedback.isCanceled() else str(e))
+        return {self.OUTPUT: out}

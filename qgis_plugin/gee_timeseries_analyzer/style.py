@@ -2,11 +2,12 @@
 come from the palette (so dark themes keep working); one accent colour
 marks the section switch, the active tab and the main action buttons
 (objectName "primary"); InfoButton = the hover help."""
-from qgis.PyQt.QtCore import Qt, QObject, QEvent
-from qgis.PyQt.QtGui import QCursor
+from qgis.PyQt.QtCore import Qt, QObject, QEvent, QPointF, QTimer
+from qgis.PyQt.QtGui import QCursor, QPainter, QPalette
 import os
 
-from qgis.PyQt.QtWidgets import QToolButton, QToolTip, QWidget, QHBoxLayout, QSpinBox
+from qgis.PyQt.QtWidgets import (QToolButton, QToolTip, QWidget, QHBoxLayout, QSpinBox, QSplitter, QSplitterHandle,
+                                 QScrollArea, QFrame, QLabel)
 
 ACCENT = "#1f6f8b"
 ACCENT_DARK = "#185a71"
@@ -56,6 +57,124 @@ QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
 
 CORES_KEY = "gee_timeseries_analyzer/cpu_cores"
 REQUESTS_KEY = "gee_timeseries_analyzer/ee_requests"
+SPLITTER_KEY = "gee_timeseries_analyzer/splitter/"
+
+
+class _Grip(QSplitterHandle):
+    """Splitter handle with a visible grip (three dots); double click =
+    default sizes."""
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(self.palette().color(QPalette.Mid if self.underMouse() else QPalette.Midlight).darker(115))
+        c = self.rect().center()
+        vertical = self.orientation() == Qt.Vertical
+        for k in (-8, 0, 8):
+            x, y = (c.x() + k, c.y()) if vertical else (c.x(), c.y() + k)
+            p.drawEllipse(QPointF(x, y + 0.5), 1.8, 1.8)
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def mouseDoubleClickEvent(self, _event):
+        self.splitter().reset()
+
+
+class Splitter(QSplitter):
+    """Sections the user can resize by dragging the grip between them
+    (vertical by default). Sizes are remembered per `key` across sessions;
+    a double click on a grip restores `defaults`. Sections marked
+    collapsible can be dragged closed (drag the grip back to reopen)."""
+
+    def __init__(self, key, orientation=Qt.Vertical, parent=None):
+        super().__init__(orientation, parent)
+        self._key = SPLITTER_KEY + key
+        self._defaults = None
+        self._restored = False
+        self.setHandleWidth(9)
+        self.setChildrenCollapsible(False)
+        self.splitterMoved.connect(self._save)
+
+    def createHandle(self):
+        return _Grip(self.orientation(), self)
+
+    def add(self, widget, stretch=0, collapsible=False):
+        self.addWidget(widget)
+        i = self.count() - 1
+        self.setStretchFactor(i, stretch)
+        self.setCollapsible(i, collapsible)
+        return widget
+
+    def set_defaults(self, sizes):
+        """Default size (px) per section; None = the rest of the space."""
+        self._defaults = list(sizes)
+
+    def _default_sizes(self):
+        if not self._defaults:
+            return None
+        total = (self.height() if self.orientation() == Qt.Vertical else self.width()) \
+            - self.handleWidth() * (self.count() - 1)
+        fixed = sum(int(s) for s in self._defaults if s is not None)
+        rest = max(120, total - fixed) // max(1, sum(s is None for s in self._defaults))
+        return [rest if s is None else int(s) for s in self._defaults]
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._restored:
+            self._restored = True
+            QTimer.singleShot(0, self._restore)          # after the first layout: real sizes known
+
+    def _restore(self):
+        from qgis.core import QgsSettings
+        saved = QgsSettings().value(self._key)
+        try:
+            sizes = [int(v) for v in saved] if isinstance(saved, (list, tuple)) else None
+        except (TypeError, ValueError):
+            sizes = None
+        sizes = sizes if sizes and len(sizes) == self.count() and sum(sizes) > 0 else self._default_sizes()
+        if sizes:
+            self.setSizes(sizes)
+
+    def _save(self, *_):
+        from qgis.core import QgsSettings
+        QgsSettings().setValue(self._key, [int(s) for s in self.sizes()])
+
+    def reset(self):
+        from qgis.core import QgsSettings
+        QgsSettings().remove(self._key)
+        sizes = self._default_sizes()
+        if sizes:
+            self.setSizes(sizes)
+
+
+class WrapLabel(QLabel):
+    """Word-wrapping label that does not report height-for-width: inside a
+    scroll area (the dock sections) such a label makes Qt size the whole
+    page by its preferred height -- an outer scroll bar and splitter
+    sections taller than the view -- instead of fitting the page in."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+
+    def hasHeightForWidth(self):
+        return False
+
+
+def scroll_pane(widget):
+    """A splitter section that scrolls when it is made smaller than its content."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.NoFrame)
+    area.setWidget(widget)
+    return area
 
 
 def cpu_count():

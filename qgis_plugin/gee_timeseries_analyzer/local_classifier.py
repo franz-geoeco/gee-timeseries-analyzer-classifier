@@ -415,6 +415,22 @@ def _stack_label(info):
     return info["year"] if info["year"] else os.path.splitext(os.path.basename(info["path"]))[0]
 
 
+def run_local_check(train_stack, classes, training, sampling="mean", max_per_class=200, seed=42,
+                    progress_cb=None, cancel_cb=None):
+    """Offline training check without training: samples ALL labelled
+    polygons (training and test) of the stack; see classification.run_check."""
+    if training.get("type") != "features":
+        raise RuntimeError("Offline, the training polygons must be a QGIS layer.")
+    info = stack_info(train_stack)
+    bands = info["bands"]
+    if not bands:
+        raise RuntimeError("The training stack has no feature bands.")
+    polys, _ = split_polygons(training["features"], classes, {"mode": "none"})
+    k._step(progress_cb, cancel_cb, 0, 1, "Sampling the training polygons")
+    df = sample_polygons(info, polys, bands, sampling, max_per_class, seed, cancel_cb)
+    return k._check_result(df, bands, classes, info["year"])
+
+
 def run_local_training(train_stack, predict_stack_path, out_path, classifier_cfg, classes, training, split,
                        mask_classes=None, sampling="mean", max_per_class=200, pixel_accuracy=True,
                        extra_samples=None, cv=None, n_jobs=-1, progress_cb=None, cancel_cb=None):

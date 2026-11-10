@@ -40,7 +40,7 @@ from qgis.PyQt.QtWidgets import (
     QTabWidget, QPushButton, QLabel, QLineEdit, QSpinBox, QDoubleSpinBox,
     QCheckBox, QRadioButton, QButtonGroup, QComboBox, QGroupBox, QListWidget,
     QListWidgetItem, QAbstractItemView, QFileDialog, QApplication, QDateEdit,
-    QProgressBar, QScrollArea, QSplitter, QTreeWidget, QTreeWidgetItem, QStackedWidget,
+    QProgressBar, QScrollArea, QTreeWidget, QTreeWidgetItem, QStackedWidget,
     QFrame, QToolButton, QSizePolicy,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
@@ -53,14 +53,15 @@ from .tasks import ExtractTask, CallTask
 from .classify_tab import ClassificationTab
 from .rotation_tab import RotationTab
 from .spectra_tab import SpectraTab
+from .indices_tab import IndicesTab
 from .recipe_widget import FeatureRecipeWidget
 from . import style
 from . import help_texts as H
 from . import classification as k
 
 TITLE = "GEE Time Series Analyzer & Classifier"
-SECTIONS = ("Spectra", "Time series", "Classification", "Export imagery")
-SEC_SPECTRA, SEC_TS, SEC_CLASS, SEC_EXPORT = range(4)
+SECTIONS = ("Spectra", "Time series", "Classification", "Indices", "Export imagery")
+SEC_SPECTRA, SEC_TS, SEC_CLASS, SEC_INDICES, SEC_EXPORT = range(5)
 CURRENT_YEAR = 2026
 MAX_POLYGONS = 300
 COMPOSITE_GROUP = "GEE Sentinel-2 composites"
@@ -217,6 +218,10 @@ class GEEDockWidget(QDockWidget):
         self.rotation_tab = RotationTab(self)
         self.classify_tab.inner.addTab(self.rotation_tab, "Crop rotation")
         self.sections.addWidget(self.classify_tab)
+
+        # Indices: spectral indices from local Sentinel-2 / Landsat rasters (indices_tab.py)
+        self.indices_tab = IndicesTab(self)
+        self.sections.addWidget(self._scrolled(self.indices_tab))
 
         # Export imagery
         self.sections.addWidget(self._scrolled(self._build_export_tab()))
@@ -778,7 +783,7 @@ class GEEDockWidget(QDockWidget):
             opts.addWidget(cb)
         layout.addLayout(opts)
 
-        splitter = QSplitter(Qt.Vertical)
+        splitter = style.Splitter("ts_compare")
         list_w = QWidget()
         list_layout = QVBoxLayout(list_w)
         list_layout.setContentsMargins(0, 0, 0, 0)
@@ -803,13 +808,13 @@ class GEEDockWidget(QDockWidget):
             b.clicked.connect(lambda _=False, f=slot: f())
             btn_row.addWidget(b)
         list_layout.addLayout(btn_row)
-        splitter.addWidget(list_w)
+        splitter.add(list_w, collapsible=True)
 
         self.cmp_plot = PlotPanel()
         p.plot_placeholder(self.cmp_plot.figure, "No analysis yet.")
         self.cmp_plot.canvas.mpl_connect("button_press_event", self._on_cmp_press)
-        splitter.addWidget(self.cmp_plot)
-        splitter.setSizes([170, 520])
+        splitter.add(self.cmp_plot, stretch=1)
+        splitter.set_defaults([170, None])
         layout.addWidget(splitter, 1)
 
         self.cmp_info = QLabel("Click a line to highlight it and its polygon on the map; "
@@ -837,6 +842,13 @@ class GEEDockWidget(QDockWidget):
         self.iface.messageBar().pushWarning(TITLE, msg)
 
     def _error(self, msg):
+        low = str(msg).lower()
+        if any(s in low for s in ("multiarray", "'write'", "numpy", "gdal_array")):
+            from . import env_check
+            c = env_check.numpy_conflict()
+            if c is not None:
+                msg = (f"{msg} — cause: NumPy {c['loaded']} from your personal Python folder replaces QGIS's NumPy "
+                       f"{c['bundled']}; see the plugin's 'Details / fix' message or the log.")
         self.iface.messageBar().pushCritical(TITLE, msg)
 
     def _analysis_layer(self):
@@ -1835,6 +1847,7 @@ class GEEDockWidget(QDockWidget):
             self._task.cancel()
         self.classify_tab.cleanup()
         self.spectra_tab.cleanup()
+        self.indices_tab.cleanup()
         self.rotation_tab.cleanup()
         if self._export_task is not None:
             self._export_task.cancel()

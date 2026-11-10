@@ -621,6 +621,33 @@ def run_cv(own_df, bands, codes, cv, fit_predict, progress_cb=None, cancel_cb=No
                              workers)
 
 
+def run_check(year, features, classes, training, sampling="mean", max_per_class=200, seed=42,
+              progress_cb=None, cancel_cb=None):
+    """Training check without training: builds the features over the
+    training polygons only (their bounding box -- no classification area
+    needed), samples ALL labelled polygons (training and test) and returns
+    what the Training check tab needs. Much faster than run_training: no
+    classifier, no map, no accuracy assessment."""
+    c.ensure_initialised()
+    bands = band_names(features, year)
+    codes = [int(q["code"]) for q in classes]
+    fc = training_collection(training, classes)
+    _step(progress_cb, cancel_cb, 0, 2, "Building the features over the training polygons")
+    stack = feature_stack(fc.geometry(10).bounds(10), year, features)
+    _step(progress_cb, cancel_cb, 1, 2, "Sampling the training polygons")
+    df = fetch_samples(sample_collection(stack, fc, bands, sampling, int(features.get("scale", 10)),
+                                         max_per_class, seed, codes), bands)
+    return _check_result(df, bands, classes, year)
+
+
+def _check_result(df, bands, classes, year):
+    if len(df) == 0:
+        raise RuntimeError("No samples with complete features -- check the season, the cloud settings and "
+                           "that the training polygons overlap the data.")
+    return {"check_only": True, "train_df": df, "model": {"bands": bands}, "classes": classes, "year": year,
+            "n_polygons": int(df[ID_PROP].nunique()), "n_pixels": len(df)}
+
+
 def run_training(year, features, classifier_cfg, classes, training, split, aoi,
                  mask_classes=None, sampling="mean", max_per_class=200, pixel_accuracy=True,
                  extra_samples=None, cv=None, workers=4, progress_cb=None, cancel_cb=None):

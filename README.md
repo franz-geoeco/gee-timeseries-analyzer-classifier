@@ -25,21 +25,23 @@ The plugin works with polygons you draw, import or click on the map. It charts S
 - [Getting started](#getting-started)
 - [Outputs and file formats](#outputs-and-file-formats)
 - [Privacy and data](#privacy-and-data)
+- [Troubleshooting](#troubleshooting)
 - [Limitations](#limitations)
 - [Repository layout](#repository-layout)
 - [License and attribution](#license-and-attribution)
 
 ## Features
 
-The dock has four sections. Every group and the less obvious settings have an **ⓘ** button that explains them when you hover over it.
+The dock has five sections. Their parts can be resized: drag the grip (•••) between them, e.g. to give a chart more room; the sizes are remembered and a double click on a grip restores the default. Every group and the less obvious settings have an **ⓘ** button that explains them when you hover over it.
 
 ### Spectra
 - **Surface-reflectance spectra** of points and polygons, anywhere on Earth, for a chosen **date**. For each sensor, Sentinel-2 SR (10 m) and Landsat 8/9 C2 L2 (30 m), the image **closest in time** within a search window is used. With the cloud mask on, only an image that is clear at that spot counts. The date and day difference are shown per sample.
 - Add samples by clicking a point, drawing a polygon, or taking the selected features of a layer. Points give the pixel value; polygons give mean ± standard deviation.
 - Charts show all samples per sensor, or both sensors of one sample, with the visible, red-edge, NIR and SWIR regions marked.
-- **Local Sentinel-2 L2A scenes** (`.SAFE.zip` as downloaded, or an unzipped `.SAFE` folder) can be added as further sources, **offline**. Bands are read at their finest resolution, with the product's reflectance offset and the SCL cloud mask applied, and are compared directly with the Earth Engine sensors.
+- **Local Sentinel-2 L2A scenes** (`.SAFE.zip` as downloaded, an unzipped `.SAFE` folder, or a **GeoTIFF / VRT stack** such as the result of *Export…* — also Landsat stacks) can be added as further sources, **offline**. Bands are read at their finest resolution, with the product's reflectance offset and the SCL cloud mask applied, and are compared directly with the Earth Engine sensors.
+- GeoTIFF / VRT stacks: bands are recognised from their wavelengths or names (or the usual Sentinel-2 / Landsat band order), the reflectance scaling from the metadata (scale / offset, Sentinel-2 DN, Landsat Collection 2), date and sensor from the metadata or the file name; an SCL band gives the cloud mask. A GeoTIFF from *Export…* gives exactly the same spectra as its `.SAFE.zip`.
 - Samples can be renamed in the table. When features are taken from a layer, their names come from a chosen column.
-- *Show images on map* adds the true-colour scene of the closest day (and the TCI of local scenes). The spectra can be exported as CSV.
+- *Show images on map* adds the true-colour scene of the closest day. Local scenes are added with **all bands** (surface reflectance, SCL last), drawn as true colour; other band combinations can be chosen in *Layer Properties → Symbology*. *Export…* writes a local scene as one GeoTIFF with all bands at 10 m, keeping band names, wavelengths and product metadata (also a Processing tool). The spectra can be exported as CSV.
 
 ### Time series
 - **Polygons** come from several sources: draw them on the map, import them from any layer or file (SHP, GPKG, GeoJSON, KML…), click fields of a layer (*Field Inspector*), or download a GEE table asset as a styled layer.
@@ -69,7 +71,7 @@ The dock has four sections. Every group and the less obvious settings have an **
   - OA with confidence interval, kappa, balanced accuracy, quantity/allocation disagreement
   - pixel-level accuracy of the map
   - **spatial k-fold cross-validation** (folds of spatial blocks)
-- **Class profiles** (mean ± 1σ per class over the season) and a **training check** that flags likely mislabelled training fields. Flagged fields can be excluded with one click before retraining.
+- **Class profiles** (mean ± 1σ per class over the season) and a **training check** that flags likely mislabelled training fields. Flagged fields can be excluded with one click before retraining. *Check training data* runs this check **before** training (features and samples only, no classifier or map), so the training data can be cleaned quickly.
 - **Models as JSON files**: apply a model to other years (its features are rebuilt and it is retrained from the stored samples), and pool the samples of several years for **multi-year training**.
 - **Performance settings**: choose the CPU cores for the offline engine (Random Forest training and prediction run in parallel) and the number of parallel Earth Engine requests for downloads and cross-validation.
 - **Field-level results**: majority class per field, its share of the field (a confidence measure) and the runner-up class.
@@ -78,6 +80,13 @@ The dock has four sections. Every group and the less obvious settings have an **
   - an interactive **HTML viewer of all Random Forest trees**
   - CSV tables
 - **Crop rotation**: class areas per year, transition matrices, a flow diagram and a change map from yearly maps.
+
+### Indices
+- **25 spectral indices computed locally** (no Earth Engine) from a Sentinel-2 or Landsat raster: a GeoTIFF / VRT stack (e.g. *Export…* of a local scene), the all-bands layer of a local scene, or a Sentinel-2 L2A `.SAFE.zip` directly.
+- Library: NDVI, EVI, EVI2, SAVI, MSAVI, OSAVI, GNDVI, CIgreen, ARVI, VARI, NIRv, kNDVI; red edge (Sentinel-2): NDRE, CIre, MCARI, IRECI, S2REP; water / moisture: NDWI, MNDWI, NDMI, AWEInsh; soil, burn, built-up: NBR, NBR2, NDBI, BSI. Hover an index for its formula and reference.
+- **Bands are picked from the metadata**: wavelength metadata, band names (B8A, B08, SR_B5, "central wavelength 842 nm" …) or the sensor's usual band order; every assignment can be changed by hand. Indices whose bands are missing (e.g. red edge on Landsat) are greyed out.
+- **Reflectance scaling is automatic**: scale / offset stored in the file, Sentinel-2 digital numbers (incl. the −1000 offset of processing baseline ≥ 04.00), Landsat Collection 2 Level-2 (× 0.0000275 − 0.2), or chosen by hand.
+- Output: **one GeoTIFF stack with a named band per index** or **one single-band GeoTIFF per index** (Float32, NoData = NaN, formula and bands in the metadata), for the whole raster or the map view; added to the map with a colour ramp per index. Runs block-wise in the background (a whole Sentinel-2 tile with three indices: about 40 s).
 
 ### Export imagery
 - Composites and time-series stacks for a polygon layer, a rectangle drawn on the map or the map view. You can export one stack per year, one file per period or one file per variable, as Float32 or as scaled Int16.
@@ -123,6 +132,7 @@ The following algorithms work in batch mode and in the Model Builder:
   ```
   python -m pip install scikit-learn
   ```
+  pip should not install a second NumPy while doing so (see [Troubleshooting](#troubleshooting)).
 
 ## Installation
 
@@ -198,6 +208,38 @@ A detailed description of every option is in the [plugin README](qgis_plugin/gee
   - **Exported stacks** contain their full settings.
 
   Check these files before you share them, if any of this is sensitive.
+
+## Troubleshooting
+
+**`AttributeError: 'NoneType' object has no attribute 'write'`** (traceback in `...\numpy\core\_multiarray_umath.py`), or `numpy.core.multiarray failed to import`: a **NumPy 2.x in your personal Python folder** (`%APPDATA%\Python\Python312\site-packages`, usually installed by another plugin or a `pip install`) replaces the NumPy 1.x that QGIS ships. QGIS's GDAL is built for NumPy 1.x, so everything that reads raster pixels fails, in this plugin (local scenes, Indices, offline classification, exports) and in QGIS itself. The plugin detects this at start and shows a message with *Details / fix*.
+
+Typical error message (QGIS 3.44.3, Windows):
+```
+Ein Fehler trat bei der Ausführung von Python-Code auf:
+AttributeError: 'NoneType' object has no attribute 'write'
+
+Traceback (most recent call last):
+  File "C:\Users\<name>\AppData\Roaming\Python\Python312\site-packages\numpy\core\_multiarray_umath.py", line 43, in __getattr__
+    sys.stderr.write(msg + tb_msg)
+AttributeError: 'NoneType' object has no attribute 'write'
+```
+In the *Python-Pfad* (Python path) list below the message, `C:\Users\<name>\AppData\Roaming\Python\Python312\site-packages` appears **before** QGIS's own `...\apps\Python312\Lib\site-packages`.
+
+**Fix:**
+
+1. Close QGIS.
+2. Open the **OSGeo4W Shell** from the Start menu (QGIS folder), **not** as administrator, and run:
+   ```
+   python -c "import numpy; print(numpy.__version__, numpy.__file__)"
+   ```
+3. If it shows 2.x in `AppData\Roaming\Python`, run:
+   ```
+   python -m pip uninstall numpy
+   ```
+4. Run the first command again. It must now show QGIS's NumPy (1.26.x) from `C:\Program Files\QGIS 3.44.3\...` (or your QGIS folder).
+5. Start QGIS.
+
+Packages in that folder that require NumPy 2 may then need older versions. Alternatively, let QGIS ignore the personal folder: *Settings → Options → System → Environment*, add `PYTHONNOUSERSITE` = `1` (Overwrite) and restart; packages installed there (e.g. scikit-learn) are then not available either.
 
 ## Limitations
 

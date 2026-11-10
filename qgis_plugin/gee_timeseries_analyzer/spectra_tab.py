@@ -23,7 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QFileDialog,
     QProgressBar, QHeaderView, QListWidget, QListWidgetItem,
 )
-from qgis.core import QgsRasterLayer, NULL
+from qgis.core import QgsRasterLayer, QgsMultiBandColorRenderer, QgsContrastEnhancement, NULL
 
 from . import gee_client as c
 from . import help_texts as H
@@ -35,6 +35,7 @@ from . import style
 from .tasks import CallTask
 
 MAX_SAMPLES = 10
+CHART_MIN = 300                 # px; the chart pane scrolls below this (one panel per sensor: 280 each)
 
 
 def _sample_all(geojson, sensors, date, window_days, max_cloud, cloud_mask, min_clear, scenes,
@@ -109,17 +110,24 @@ class SpectraTab(QWidget):
         srow.addStretch(1)
         form.addRow("Earth Engine:", srow)
         self.scene_list = QListWidget()
-        self.scene_list.setMaximumHeight(70)
-        self.scene_list.setToolTip("Local Sentinel-2 L2A scenes: tick to include them in the sampling")
+        self.scene_list.setMinimumHeight(44)
+        self.scene_list.setToolTip("Local scenes (Sentinel-2 L2A products or GeoTIFF stacks): tick to include them in "
+                                   "the sampling")
         self.scene_list.itemChanged.connect(self._mark_stale)
         lrow2 = QHBoxLayout()
         b_add = QPushButton("Add scenes…")
-        b_add.setToolTip("Sentinel-2 L2A .SAFE.zip, or MTD_MSIL2A.xml of an unzipped .SAFE folder")
+        b_add.setToolTip("Sentinel-2 L2A .SAFE.zip, MTD_MSIL2A.xml of an unzipped .SAFE folder, or a GeoTIFF / VRT "
+                         "stack with Sentinel-2 / Landsat bands (e.g. from 'Export…')")
         b_add.clicked.connect(self.on_add_scenes)
         b_rm = QPushButton("Remove")
         b_rm.clicked.connect(self.on_remove_scenes)
+        b_exp = QPushButton("Export…")
+        b_exp.setToolTip("Write the selected scene as one GeoTIFF: all bands at 10 m with band names, wavelengths "
+                         "and product metadata (Processing tool; extent = current map view)")
+        b_exp.clicked.connect(self.on_export_scene)
         lrow2.addWidget(b_add)
         lrow2.addWidget(b_rm)
+        lrow2.addWidget(b_exp)
         lrow2.addStretch(1)
         lrow2.addWidget(style.InfoButton(H.SPECTRA_LOCAL))
         lbox = QVBoxLayout()
@@ -151,7 +159,8 @@ class SpectraTab(QWidget):
             (w.dateChanged if w is self.date else w.valueChanged).connect(self._mark_stale)
         for cb in (self.chk_s2, self.chk_ls, self.chk_mask):
             cb.toggled.connect(self._mark_stale)
-        lay.addWidget(box)
+        split = style.Splitter("spectra")
+        split.add(style.scroll_pane(box), collapsible=True)
 
         sbox = QGroupBox("Samples")
         sl = QVBoxLayout(sbox)
@@ -188,12 +197,11 @@ class SpectraTab(QWidget):
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree.setMinimumHeight(110)
-        self.tree.setMaximumHeight(190)
+        self.tree.setMinimumHeight(60)
         self.tree.itemClicked.connect(self._on_tree_click)
         self.tree.itemChanged.connect(self._on_tree_renamed)
         self.tree.setToolTip("Double click a name to rename the sample")
-        sl.addWidget(self.tree)
+        sl.addWidget(self.tree, 1)
         brow = QHBoxLayout()
         for label, slot in (("Remove selected", self.on_remove), ("Clear all", self.on_clear),
                             ("Re-sample all", self.on_resample)):
@@ -203,29 +211,36 @@ class SpectraTab(QWidget):
         sl.addLayout(brow)
         brow2 = QHBoxLayout()
         b_img = QPushButton("Show images on map")
-        b_img.setToolTip("Adds the true-colour scene of the closest acquisition day (map view) for each sensor")
+        b_img.setToolTip("Adds the true-colour scene of the closest acquisition day (map view) for each sensor; "
+                         "local scenes come with all bands (switch them in Layer Properties → Symbology)")
         b_img.clicked.connect(self.on_show_images)
         b_csv = QPushButton("Export CSV…")
         b_csv.clicked.connect(self.on_export_csv)
         brow2.addWidget(b_img)
         brow2.addWidget(b_csv)
         sl.addLayout(brow2)
-        lay.addWidget(sbox)
+        split.add(style.scroll_pane(sbox), collapsible=True)
 
+        chart = QWidget()
+        cl = QVBoxLayout(chart)
+        cl.setContentsMargins(0, 0, 0, 0)
         vrow = QHBoxLayout()
         vrow.addWidget(QLabel("Chart:"))
         self.view = QComboBox()
         self.view.currentIndexChanged.connect(lambda *_: self._redraw())
         vrow.addWidget(self.view, 1)
-        lay.addLayout(vrow)
+        cl.addLayout(vrow)
         self.plot = PlotPanel()
-        self.plot.canvas.setMinimumHeight(460)
+        self.plot.canvas.setMinimumHeight(CHART_MIN)
         p.plot_placeholder(self.plot.figure, "Click a point or draw a polygon on the map to sample a spectrum.")
-        lay.addWidget(self.plot, 1)
+        cl.addWidget(self.plot, 1)
+        split.add(chart, stretch=1)
+        split.set_defaults([box.sizeHint().height() - self.scene_list.sizeHint().height() + 54,
+                            sbox.sizeHint().height() - self.tree.sizeHint().height() + 100, None])
+        lay.addWidget(split, 1)
 
         row = QHBoxLayout()
-        self.status = QLabel(f"Up to {MAX_SAMPLES} samples. The closest clear image per sensor is used.")
-        self.status.setWordWrap(True)
+        self.status = style.WrapLabel(f"Up to {MAX_SAMPLES} samples. The closest clear image per sensor is used.")
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setMaximumWidth(140)
@@ -506,7 +521,9 @@ class SpectraTab(QWidget):
 
     def on_add_scenes(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Sentinel-2 L2A scenes", "", "Sentinel-2 L2A (*.zip MTD_MSIL2A.xml);;All files (*)")
+            self, "Local scenes", "",
+            "Sentinel-2 L2A or raster stacks (*.zip MTD_MSIL2A.xml *.tif *.tiff *.vrt *.img);;"
+            "Sentinel-2 L2A (*.zip MTD_MSIL2A.xml);;Raster stacks (*.tif *.tiff *.vrt *.img);;All files (*)")
         for path in paths:
             try:
                 scene = self.dock._run_busy(ls.open_scene, path)
@@ -522,9 +539,31 @@ class SpectraTab(QWidget):
             it.setData(Qt.UserRole, key)
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked)
-            it.setToolTip(f"{scene['product']} · processing baseline {scene['baseline']}")
+            it.setToolTip(ls.scene_info(scene))
             self.scene_list.addItem(it)
         self._refresh_tree()
+
+    def on_export_scene(self):
+        items = self.scene_list.selectedItems() or [self.scene_list.item(i) for i in range(self.scene_list.count())]
+        if not items:
+            self.dock._warn("Add a local Sentinel-2 scene first.")
+            return
+        scene = self.scenes.get(items[0].data(Qt.UserRole))
+        if scene is None:
+            return
+        if scene.get("kind") == "raster":
+            self.dock._warn(f"{os.path.basename(scene['path'])} is already a raster file — 'Export…' writes "
+                            "Sentinel-2 L2A products (.SAFE.zip) as GeoTIFF.")
+            return
+        e = self.canvas.extent()
+        crs = self.canvas.mapSettings().destinationCrs().authid()
+        params = {"SCENE": scene["path"],
+                  "EXTENT": f"{e.xMinimum()},{e.xMaximum()},{e.yMinimum()},{e.yMaximum()} [{crs}]"}
+        try:
+            import processing
+            processing.execAlgorithmDialog("geetimeseriesanalyzer:export_local_sentinel2", params)
+        except Exception as ex:
+            self.dock._error(f"Could not open the export tool: {ex}")
 
     def on_remove_scenes(self):
         for it in self.scene_list.selectedItems():
@@ -560,8 +599,8 @@ class SpectraTab(QWidget):
             p.plot_placeholder(self.plot.figure, "Still sampling …")
         else:
             p.plot_spectra(self.plot.figure, done, sensors, single, {k: self._label(k) for k in sensors})
-        self.plot.canvas.setMinimumHeight(460 if single is not None or len(sensors) == 1
-                                          else 310 * len(sensors))
+        self.plot.canvas.setMinimumHeight(CHART_MIN if single is not None or len(sensors) == 1
+                                          else 280 * len(sensors))
         self.plot.redraw()
 
     # ------------------------------------------------------------------
@@ -579,14 +618,18 @@ class SpectraTab(QWidget):
         group = root.findGroup(IMAGE_GROUP) or root.insertGroup(0, IMAGE_GROUP)
         added = []
         for k in [k for k in settings["sensors"] if k in self.scenes]:
-            tci = ls.tci_path(self.scenes[k])
-            name = f"{ls.scene_label(self.scenes[k])} true colour"
-            if tci and not project.mapLayersByName(name):
-                layer = QgsRasterLayer(tci, name)
-                if layer.isValid():
-                    project.addMapLayer(layer, False)
-                    group.insertLayer(0, layer)
-                    added.append(name)
+            name = f"{ls.scene_label(self.scenes[k])} all bands"
+            if project.mapLayersByName(name):
+                continue
+            try:
+                layer = self._scene_layer(self.scenes[k], name)
+            except Exception as e:
+                self.dock._error(f"{name}: {e}")
+                continue
+            if layer is not None:
+                project.addMapLayer(layer, False)
+                group.insertLayer(0, layer)
+                added.append(name)
         for k in [k for k in settings["sensors"] if k in sp.SENSORS]:
             if not self.dock._ensure_ee():
                 break
@@ -612,6 +655,37 @@ class SpectraTab(QWidget):
             added.append(name)
         if added:
             self.status.setText("Added: " + "; ".join(added))
+
+    @staticmethod
+    def _scene_layer(scene, name):
+        """All bands of a local scene (reflectance, SCL last) as one raster
+        layer, drawn as true colour (B4/B3/B2, 0-0.3, gamma 1.2 like the
+        Earth Engine layers). The bands can be switched in the layer
+        properties (Symbology), e.g. to B8/B4/B3 false colour. A GeoTIFF /
+        VRT scene is shown as it is, with its red / green / blue bands."""
+        if scene.get("kind") == "raster":
+            layer = QgsRasterLayer(scene["path"], name)
+            rgb = ls.raster_rgb(scene)
+            if rgb is None:
+                return layer if layer.isValid() else None
+        else:
+            out = os.path.join(QgsApplication.qgisSettingsDirPath(), *ls.VRT_SUBDIR)
+            layer = QgsRasterLayer(ls.build_vrt(scene, out), name)
+            rgb = [(b, 0.0, 0.3) for b in ls.RGB_BANDS]
+        if not layer.isValid():
+            return None
+        dp = layer.dataProvider()
+        ren = QgsMultiBandColorRenderer(dp, *[b for b, _lo, _hi in rgb])
+        for setter, (band, lo, hi) in zip((ren.setRedContrastEnhancement, ren.setGreenContrastEnhancement,
+                                           ren.setBlueContrastEnhancement), rgb):
+            ce = QgsContrastEnhancement(dp.dataType(band))
+            ce.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
+            ce.setMinimumValue(lo)
+            ce.setMaximumValue(hi)
+            setter(ce)
+        layer.setRenderer(ren)
+        layer.brightnessFilter().setGamma(1.2)
+        return layer
 
     def on_export_csv(self):
         done = [s for s in self.samples if s.get("results")]

@@ -112,7 +112,11 @@ SPECTRA_LOCAL = ("Local Sentinel-2 Level-2A scenes, e.g. a <i>.SAFE.zip</i> from
                  "(no need to unzip) or the <i>MTD_MSIL2A.xml</i> of an unzipped .SAFE folder. Each ticked scene "
                  "is sampled like a sensor — offline, without Earth Engine: bands at their finest resolution, "
                  "the product's reflectance offset (baseline ≥ 04.00: −1000) applied, SCL cloud mask as above. "
-                 "The day difference refers to the target date.")
+                 "The day difference refers to the target date. <b>GeoTIFF / VRT stacks</b> work as well, e.g. "
+                 "from <i>Export…</i>: the bands are recognised from their wavelengths / names (or the "
+                 "Sentinel-2 / Landsat band order), the reflectance scaling from the metadata, date and sensor "
+                 "from the metadata or the file name; an SCL band gives the cloud mask. Values are read on the "
+                 "raster's own grid.")
 SPECTRA_CLOUD = ("<b>Cloud mask</b>: Sentinel-2 SCL (cloud, shadow, cirrus, saturated) / Landsat QA_PIXEL "
                  "(cloud, dilated cloud, shadow, cirrus). With the mask, a date only counts if the point is "
                  "clear — or, for polygons, at least the given share of the polygon. <b>Scenes ≤ x % cloud</b> "
@@ -147,6 +151,24 @@ EXP_DTYPE = ("<b>Float32</b>: reflectance 0–1, indices, dB. <b>Int16</b>: opti
              "values.")
 CHECK = ("Training polygons whose features lie far from their own class (robust mean |z| above the threshold) "
          "or closer to another class's centroid. Typical causes: wrong label, mixed or late-sown fields, "
-         "clouds. Check them on the map before excluding.")
+         "clouds. Check them on the map before excluding. 'Check training data' (next to Train & classify) runs "
+         "this check before training -- features and samples only, no classifier or map -- on all labelled "
+         "polygons, training and test.")
 PROFILES = ("Mean ± 1 standard deviation of the model's training samples per class and period. Where the "
             "bands of two classes overlap over the whole season, the classifier cannot separate them well.")
+
+INDICES_INPUT = ("Any local raster with Sentinel-2 or Landsat bands: a GeoTIFF / VRT stack (e.g. 'Export…' of a local "
+                 "scene in the Spectra section), the all-bands layer of a local scene, or a Sentinel-2 L2A "
+                 ".SAFE.zip directly. The bands are recognised from wavelength metadata, band names (B8A, B08, "
+                 "SR_B5, 'central wavelength 842 nm' ...) or, if the sensor is known (file name, metadata or the "
+                 "choice here), from its usual band order. Check the assignment under Bands.")
+INDICES_SCALING = ("The indices need surface reflectance (0-1); EVI, SAVI, MSAVI and others give wrong values on "
+                   "digital numbers. Automatic: scale / offset stored in the file; float values <= 2 are taken as "
+                   "reflectance; Sentinel-2 digital numbers / 10000, minus 0.1 for processing baseline >= 04.00 "
+                   "(from the metadata or the product name, N0400 and later); Landsat Collection 2 Level-2: "
+                   "x 0.0000275 - 0.2.")
+GROUPS.update({
+    "Bands": "Which band serves which spectral region. Filled in automatically; change any of them by hand.",
+    "Indices": ("About 25 indices in four groups. Hover an index for its formula and reference; greyed indices need "
+                "bands the raster lacks (e.g. red edge on Landsat)."),
+})
