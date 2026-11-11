@@ -15,13 +15,15 @@ from qgis.core import (
     QgsApplication, QgsProject, QgsGeometry, QgsCoordinateTransform, QgsWkbTypes, QgsPointXY,
     QgsMapLayerProxyModel,
 )
-from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsMapToolEmitPoint, QgsRubberBand, QgsVertexMarker
-from qgis.PyQt.QtCore import Qt, QDate
+from qgis.gui import (
+    QgsMapLayerComboBox, QgsFieldComboBox, QgsMapToolEmitPoint, QgsMapToolExtent, QgsRubberBand, QgsVertexMarker,
+)
+from qgis.PyQt.QtCore import Qt, QDate, QTimer
 from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QPushButton, QLabel, QSpinBox,
     QCheckBox, QComboBox, QDateEdit, QTreeWidget, QTreeWidgetItem, QAbstractItemView, QFileDialog,
-    QProgressBar, QHeaderView, QListWidget, QListWidgetItem,
+    QProgressBar, QHeaderView, QListWidget, QListWidgetItem, QMenu,
 )
 from qgis.core import QgsRasterLayer, QgsMultiBandColorRenderer, QgsContrastEnhancement, NULL
 
@@ -76,6 +78,12 @@ class SpectraTab(QWidget):
         self.point_tool.canvasClicked.connect(self._on_point)
         self.poly_tool = pl.PolygonDrawTool(self.canvas)
         self.poly_tool.polygonDrawn.connect(self._on_polygon)
+        # export area of a local scene: drawn here *before* the Processing dialog opens.
+        # The dialog's own 'Draw on map canvas' hides the modal dialog while drawing,
+        # and on macOS it does not come back.
+        self.export_rect_tool = QgsMapToolExtent(self.canvas)
+        self.export_rect_tool.extentChanged.connect(self._on_export_rect_drawn)
+        self._export_scene_path = None
         self.canvas.mapToolSet.connect(self._on_map_tool_set)
         self._build_ui()
 
@@ -123,8 +131,13 @@ class SpectraTab(QWidget):
         b_rm.clicked.connect(self.on_remove_scenes)
         b_exp = QPushButton("Export…")
         b_exp.setToolTip("Write the selected scene as one GeoTIFF: all bands at 10 m with band names, wavelengths "
-                         "and product metadata (Processing tool; extent = current map view)")
-        b_exp.clicked.connect(self.on_export_scene)
+                         "and product metadata (Processing tool) — for the current map view or a rectangle "
+                         "drawn on the map")
+        exp_menu = QMenu(b_exp)
+        exp_menu.addAction("Current map view…", lambda: self.on_export_scene("view"))
+        exp_menu.addAction("Draw a rectangle on the map…", lambda: self.on_export_scene("draw"))
+        exp_menu.addAction("Whole tile…", lambda: self.on_export_scene("all"))
+        b_exp.setMenu(exp_menu)
         lrow2.addWidget(b_add)
         lrow2.addWidget(b_rm)
         lrow2.addWidget(b_exp)
@@ -257,7 +270,7 @@ class SpectraTab(QWidget):
         if on:
             other.setChecked(False)
             current = self.canvas.mapTool()
-            if current not in (self.point_tool, self.poly_tool):
+            if current not in (self.point_tool, self.poly_tool, self.export_rect_tool):
                 self._prev_tool = current
             self.canvas.setMapTool(tool)
         elif self.canvas.mapTool() is tool:
@@ -271,6 +284,9 @@ class SpectraTab(QWidget):
             self.btn_point.setChecked(False)
         if new_tool is not self.poly_tool and self.btn_poly.isChecked():
             self.btn_poly.setChecked(False)
+        if new_tool is not self.export_rect_tool and self._export_scene_path is not None:
+            self._export_scene_path = None      # rectangle drawing for an export abandoned
+            self.status.setText("")
 
     def _to_wgs84(self, geom, crs=None):
         g = QgsGeometry(geom)
@@ -491,6 +507,7 @@ class SpectraTab(QWidget):
             xform = QgsCoordinateTransform(pl.WGS84, self.canvas.mapSettings().destinationCrs(), QgsProject.instance())
             g = QgsGeometry(s["geom"])
             g.transform(xform)
+            self.dock.center_map_on(g.boundingBox())
             self.canvas.flashGeometries([g])
 
     def on_remove(self):
@@ -543,7 +560,7 @@ class SpectraTab(QWidget):
             self.scene_list.addItem(it)
         self._refresh_tree()
 
-    def on_export_scene(self):
+    def on_export_scene(self, area="view"):
         items = self.scene_list.selectedItems() or [self.scene_list.item(i) for i in range(self.scene_list.count())]
         if not items:
             self.dock._warn("Add a local Sentinel-2 scene first.")
@@ -555,10 +572,35 @@ class SpectraTab(QWidget):
             self.dock._warn(f"{os.path.basename(scene['path'])} is already a raster file — 'Export…' writes "
                             "Sentinel-2 L2A products (.SAFE.zip) as GeoTIFF.")
             return
-        e = self.canvas.extent()
-        crs = self.canvas.mapSettings().destinationCrs().authid()
-        params = {"SCENE": scene["path"],
-                  "EXTENT": f"{e.xMinimum()},{e.xMaximum()},{e.yMinimum()},{e.yMaximum()} [{crs}]"}
+        if area == "draw":
+            self._export_scene_path = scene["path"]
+            current = self.canvas.mapTool()
+            if current not in (self.point_tool, self.poly_tool, self.export_rect_tool):
+                self._prev_tool = current
+            self.canvas.setMapTool(self.export_rect_tool)
+            self.status.setText("Drag a rectangle on the map for the export area …")
+            return
+        self._open_export_dialog(scene["path"], self.canvas.extent() if area == "view" else None)
+
+    def _on_export_rect_drawn(self, rect):
+        path, self._export_scene_path = self._export_scene_path, None
+        self.export_rect_tool.clearRubberBand()
+        if self.canvas.mapTool() is self.export_rect_tool:
+            if self._prev_tool is not None:
+                self.canvas.setMapTool(self._prev_tool)
+            else:
+                self.canvas.unsetMapTool(self.export_rect_tool)
+        if path is None or rect.isEmpty():
+            return
+        self.status.setText("")
+        # open the dialog only after the map tool's mouse release has been handled
+        QTimer.singleShot(0, lambda: self._open_export_dialog(path, rect))
+
+    def _open_export_dialog(self, path, rect):
+        params = {"SCENE": path}
+        if rect is not None:
+            crs = self.canvas.mapSettings().destinationCrs().authid()
+            params["EXTENT"] = f"{rect.xMinimum()},{rect.xMaximum()},{rect.yMinimum()},{rect.yMaximum()} [{crs}]"
         try:
             import processing
             processing.execAlgorithmDialog("geetimeseriesanalyzer:export_local_sentinel2", params)
@@ -713,7 +755,7 @@ class SpectraTab(QWidget):
         self.iface.messageBar().pushSuccess("Spectra", f"Saved {os.path.basename(path)}")
 
     def cleanup(self):
-        for tool in (self.point_tool, self.poly_tool):
+        for tool in (self.point_tool, self.poly_tool, self.export_rect_tool):
             if self.canvas.mapTool() is tool:
                 self.canvas.unsetMapTool(tool)
         try:

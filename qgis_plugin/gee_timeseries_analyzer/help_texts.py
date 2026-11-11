@@ -116,7 +116,9 @@ SPECTRA_LOCAL = ("Local Sentinel-2 Level-2A scenes, e.g. a <i>.SAFE.zip</i> from
                  "from <i>Export…</i>: the bands are recognised from their wavelengths / names (or the "
                  "Sentinel-2 / Landsat band order), the reflectance scaling from the metadata, date and sensor "
                  "from the metadata or the file name; an SCL band gives the cloud mask. Values are read on the "
-                 "raster's own grid.")
+                 "raster's own grid. <b>Export…</b> writes a .SAFE.zip as one GeoTIFF for the current map view, "
+                 "a rectangle you drag on the map (drawn first, then the export dialog opens) or the whole "
+                 "tile.")
 SPECTRA_CLOUD = ("<b>Cloud mask</b>: Sentinel-2 SCL (cloud, shadow, cirrus, saturated) / Landsat QA_PIXEL "
                  "(cloud, dilated cloud, shadow, cirrus). With the mask, a date only counts if the point is "
                  "clear — or, for polygons, at least the given share of the polygon. <b>Scenes ≤ x % cloud</b> "

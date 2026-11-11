@@ -383,10 +383,9 @@ class GEEDockWidget(QDockWidget):
         self.poly_list = QListWidget()
         self.poly_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.poly_list.setMinimumHeight(110)
-        self.poly_list.setToolTip("Click: show this polygon's charts and select it on the map · "
+        self.poly_list.setToolTip("Click: show this polygon's charts, select it and centre the map on it · "
                                   "double click: open the Charts tab")
-        self.poly_list.itemClicked.connect(
-            lambda it: self.show_polygon(it.data(Qt.UserRole), switch_tab=False))
+        self.poly_list.itemClicked.connect(self._on_poly_list_click)
         self.poly_list.itemDoubleClicked.connect(
             lambda it: self.show_polygon(it.data(Qt.UserRole), switch_tab=True))
         list_layout.addWidget(self.poly_list)
@@ -796,8 +795,7 @@ class GEEDockWidget(QDockWidget):
                                  "ticked polygons on the same dates; high values are outlier candidates. "
                                  "Click a row to highlight it.")
         self.cmp_tree.itemChanged.connect(self._on_cmp_item_changed)
-        self.cmp_tree.itemClicked.connect(
-            lambda it, col: self._highlight_compare(it.data(0, Qt.UserRole)))
+        self.cmp_tree.itemClicked.connect(self._on_cmp_tree_click)
         list_layout.addWidget(self.cmp_tree)
         btn_row = QHBoxLayout()
         for label, slot in (("All", lambda: self._cmp_set_checked(None)),
@@ -1320,6 +1318,11 @@ class GEEDockWidget(QDockWidget):
             self.tabs.setCurrentIndex(2)
             self._show_section(SEC_TS)
 
+    def _on_poly_list_click(self, item):
+        pid = item.data(Qt.UserRole)
+        self.show_polygon(pid, switch_tab=False)
+        self._pan_to(pid, always=True)
+
     def _poly_by_pid(self, pid):
         return next((q for q in self.analysis_polygons if q["pid"] == pid), None)
 
@@ -1336,16 +1339,29 @@ class GEEDockWidget(QDockWidget):
         if ids and flash:
             self.canvas.flashFeatureIds(layer, ids)
 
-    def _pan_to(self, pid):
+    def _pan_to(self, pid, always=False):
+        """Pans the map to a polygon: only when it is off screen, or always
+        (centred; zoomed out if it does not fit)."""
         poly = self._poly_by_pid(pid)
         if poly is None:
             return
         xform = QgsCoordinateTransform(pl.WGS84, self.canvas.mapSettings().destinationCrs(),
                                        QgsProject.instance())
         r = xform.transformBoundingBox(poly["bbox"])
-        if not self.canvas.extent().contains(r):
-            self.canvas.setCenter(r.center())
-            self.canvas.refresh()
+        if always or not self.canvas.extent().contains(r):
+            self.center_map_on(r)
+
+    def center_map_on(self, rect):
+        """Centres the map on a rectangle (map CRS) at the current scale;
+        zooms out when it does not fit the view."""
+        ext = self.canvas.extent()
+        if rect.width() > ext.width() * 0.9 or rect.height() > ext.height() * 0.9:
+            r = QgsRectangle(rect)
+            r.scale(1.2)
+            self.canvas.setExtent(r)
+        else:
+            self.canvas.setCenter(rect.center())
+        self.canvas.refresh()
 
     def _on_analysis_selection_changed(self, *_):
         """Polygon selected on the map (select tool, attribute table, ...)
@@ -1509,6 +1525,11 @@ class GEEDockWidget(QDockWidget):
             self._select_on_map([pid])
         if pan and self.chk_cmp_pan.isChecked():
             self._pan_to(pid)
+
+    def _on_cmp_tree_click(self, item, _col):
+        pid = item.data(0, Qt.UserRole)
+        self._highlight_compare(pid, pan=False)
+        self._pan_to(pid, always=True)
 
     def _cmp_line_at(self, event):
         if event.inaxes is None:
